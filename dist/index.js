@@ -20048,9 +20048,21 @@ var DoitClient = class {
   }
   async fetchTokenDiagnostics() {
     try {
-      const { response, rawText } = await this.executeSingleRequest("GET", "/auth/v1/validate", {
-        includeTenantHeader: false
+      let { response, rawText } = await this.executeSingleRequest("GET", "/auth/v1/validate", {
+        includeTenantHeader: Boolean(this.tenantId),
+        includeCustomerContextQuery: Boolean(this.tenantId)
       });
+      if (!response.ok) {
+        const fallback = await this.executeSingleRequest("GET", "/auth/v1/validate", {
+          query: { customerContext: "doit.com" },
+          includeTenantHeader: false,
+          includeCustomerContextQuery: false
+        });
+        if (fallback.response.ok) {
+          response = fallback.response;
+          rawText = fallback.rawText;
+        }
+      }
       if (response.ok && rawText) {
         const parsed = JSON.parse(rawText);
         const perms = Array.isArray(parsed.permissions) ? parsed.permissions.length > 0 ? parsed.permissions.join(", ") : "none/doer-token" : "unknown";
