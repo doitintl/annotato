@@ -39,6 +39,10 @@ By placing automated release markers directly on your DoiT Cloud Analytics cost 
 4. **DoiT Annotation API Call**: Annotato sends a request (`POST`, `PATCH`, `DELETE`, or `GET`) to `https://api.doit.com/analytics/v1/annotations` authenticated with `Authorization: Bearer <DOIT_API_KEY>`. Your DoiT customer account is inferred automatically from your API token.
 5. **Outputs & Job Summary**: Annotato exposes the created annotation ID, content, timestamp, and JSON response as GitHub Action outputs and writes a formatted Markdown summary table to `$GITHUB_STEP_SUMMARY`.
 
+### Example in DoiT Cloud Intelligence
+
+![Example of GitHub release and commit annotations rendered in DoiT Cloud Intelligence](./annotato-example.png)
+
 ---
 
 ## Step 1: Configure DoiT Cloud Intelligence
