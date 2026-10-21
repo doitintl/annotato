@@ -77,6 +77,9 @@ describe('Annotato Action Runner & Summary', () => {
     expect(() => parseActionInputs({ 'INPUT_LABEL-COLOR': 'neonGreen' })).toThrow(
       'Invalid label-color "neonGreen"'
     );
+    expect(() => parseActionInputs({ 'INPUT_MAX-RESULTS': '9999' })).toThrow(
+      'Invalid max-results "9999"'
+    );
   });
 
   it('executes dry-run mode without making HTTP calls and writes GITHUB_STEP_SUMMARY', async () => {

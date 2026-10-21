@@ -89,7 +89,16 @@ export function parseActionInputs(env: NodeJS.ProcessEnv = process.env): ActionI
   const failOnError = parseBoolean(readRawInput('fail-on-error', env), true);
   const filter = readRawInput('filter', env) || undefined;
   const rawMaxResults = readRawInput('max-results', env);
-  const maxResults = rawMaxResults ? Number.parseInt(rawMaxResults, 10) : undefined;
+  let maxResults: number | undefined;
+  if (rawMaxResults) {
+    const parsedMax = Number.parseInt(rawMaxResults, 10);
+    if (!Number.isInteger(parsedMax) || parsedMax < 1 || parsedMax > 500) {
+      throw new Error(
+        `Invalid max-results "${rawMaxResults}". Expected an integer between 1 and 500.`
+      );
+    }
+    maxResults = parsedMax;
+  }
   const requireTag = readRawInput('require-tag', env) || undefined;
   const requireCommitTag = parseCsvList(readRawInput('require-commit-tag', env));
   const requirePrLabel = parseCsvList(readRawInput('require-pr-label', env));
@@ -111,7 +120,7 @@ export function parseActionInputs(env: NodeJS.ProcessEnv = process.env): ActionI
     dryRun,
     failOnError,
     filter,
-    maxResults: Number.isFinite(maxResults) ? maxResults : undefined,
+    maxResults,
     requireTag,
     requireCommitTag,
     requirePrLabel,

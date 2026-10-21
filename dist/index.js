@@ -3301,13 +3301,35 @@ var DoitClient = class _DoitClient {
     } catch {
       throw new Error(`Invalid DoiT API base URL: "${candidate}"`);
     }
-    const isLoopback = parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost" || parsed.hostname === "::1" || parsed.hostname === "[::1]";
+    if (parsed.username || parsed.password) {
+      throw new Error("DoiT API base URL must not contain embedded credentials.");
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    const isLoopback = hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
     if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback)) {
       throw new Error(
         `DoiT API base URL must use https:// (received "${parsed.protocol}//${parsed.hostname}").`
       );
     }
+    const isAllowedDoitHost = hostname === "api.doit.com" || hostname.endsWith(".doit.com");
+    if (!isAllowedDoitHost && !isLoopback) {
+      throw new Error(
+        `DoiT API base URL host "${parsed.hostname}" is not in the allowlist (*.doit.com).`
+      );
+    }
     return candidate;
+  }
+  static validateAnnotationId(id, operationName) {
+    const trimmedId = id?.trim();
+    if (!trimmedId) {
+      throw new Error(`Annotation ID is required for ${operationName}.`);
+    }
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(trimmedId)) {
+      throw new Error(
+        `Invalid Annotation ID "${trimmedId}" for ${operationName}. Expected 1-128 alphanumeric, underscore, or hyphen characters.`
+      );
+    }
+    return trimmedId;
   }
   buildHeaders(hasJsonBody, includeTenantHeader = true) {
     const headers = {
@@ -3338,7 +3360,9 @@ var DoitClient = class _DoitClient {
     const response = await this.fetchImpl(url.toString(), {
       method,
       headers: this.buildHeaders(hasBody, options?.includeTenantHeader ?? true),
-      body: hasBody ? JSON.stringify(options.body) : void 0
+      body: hasBody ? JSON.stringify(options.body) : void 0,
+      redirect: "error",
+      signal: AbortSignal.timeout(3e4)
     });
     const rawText = await response.text();
     return { response, rawText };
@@ -3476,10 +3500,7 @@ var DoitClient = class _DoitClient {
     }
   }
   async getAnnotation(id) {
-    const trimmedId = id?.trim();
-    if (!trimmedId) {
-      throw new Error("Annotation ID is required for getAnnotation.");
-    }
+    const trimmedId = _DoitClient.validateAnnotationId(id, "getAnnotation");
     return this.request(
       "GET",
       `/analytics/v1/annotations/${encodeURIComponent(trimmedId)}`
@@ -3497,10 +3518,7 @@ var DoitClient = class _DoitClient {
     });
   }
   async updateAnnotation(id, payload) {
-    const trimmedId = id?.trim();
-    if (!trimmedId) {
-      throw new Error("Annotation ID is required for updateAnnotation.");
-    }
+    const trimmedId = _DoitClient.validateAnnotationId(id, "updateAnnotation");
     const body = {};
     if (payload.content !== void 0) {
       body.content = payload.content;
@@ -3524,10 +3542,7 @@ var DoitClient = class _DoitClient {
     );
   }
   async deleteAnnotation(id) {
-    const trimmedId = id?.trim();
-    if (!trimmedId) {
-      throw new Error("Annotation ID is required for deleteAnnotation.");
-    }
+    const trimmedId = _DoitClient.validateAnnotationId(id, "deleteAnnotation");
     await this.request(
       "DELETE",
       `/analytics/v1/annotations/${encodeURIComponent(trimmedId)}`
@@ -3757,7 +3772,16 @@ function parseActionInputs(env = process.env) {
   const failOnError = parseBoolean(readRawInput("fail-on-error", env), true);
   const filter = readRawInput("filter", env) || void 0;
   const rawMaxResults = readRawInput("max-results", env);
-  const maxResults = rawMaxResults ? Number.parseInt(rawMaxResults, 10) : void 0;
+  let maxResults;
+  if (rawMaxResults) {
+    const parsedMax = Number.parseInt(rawMaxResults, 10);
+    if (!Number.isInteger(parsedMax) || parsedMax < 1 || parsedMax > 500) {
+      throw new Error(
+        `Invalid max-results "${rawMaxResults}". Expected an integer between 1 and 500.`
+      );
+    }
+    maxResults = parsedMax;
+  }
   const requireTag = readRawInput("require-tag", env) || void 0;
   const requireCommitTag = parseCsvList(readRawInput("require-commit-tag", env));
   const requirePrLabel = parseCsvList(readRawInput("require-pr-label", env));
@@ -3778,7 +3802,7 @@ function parseActionInputs(env = process.env) {
     dryRun,
     failOnError,
     filter,
-    maxResults: Number.isFinite(maxResults) ? maxResults : void 0,
+    maxResults,
     requireTag,
     requireCommitTag,
     requirePrLabel

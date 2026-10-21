@@ -3,5 +3,9 @@ coverage/
 *.log
 .DS_Store
 .env
+.env.local
+.env.*.local
+*.pem
+*.key
 .kimchi/
 

@@ -69,17 +69,40 @@ export class DoitClient {
     } catch {
       throw new Error(`Invalid DoiT API base URL: "${candidate}"`);
     }
+    if (parsed.username || parsed.password) {
+      throw new Error('DoiT API base URL must not contain embedded credentials.');
+    }
+    const hostname = parsed.hostname.toLowerCase();
     const isLoopback =
-      parsed.hostname === '127.0.0.1' ||
-      parsed.hostname === 'localhost' ||
-      parsed.hostname === '::1' ||
-      parsed.hostname === '[::1]';
+      hostname === '127.0.0.1' ||
+      hostname === 'localhost' ||
+      hostname === '::1' ||
+      hostname === '[::1]';
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
       throw new Error(
         `DoiT API base URL must use https:// (received "${parsed.protocol}//${parsed.hostname}").`
       );
     }
+    const isAllowedDoitHost = hostname === 'api.doit.com' || hostname.endsWith('.doit.com');
+    if (!isAllowedDoitHost && !isLoopback) {
+      throw new Error(
+        `DoiT API base URL host "${parsed.hostname}" is not in the allowlist (*.doit.com).`
+      );
+    }
     return candidate;
+  }
+
+  private static validateAnnotationId(id: string, operationName: string): string {
+    const trimmedId = id?.trim();
+    if (!trimmedId) {
+      throw new Error(`Annotation ID is required for ${operationName}.`);
+    }
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(trimmedId)) {
+      throw new Error(
+        `Invalid Annotation ID "${trimmedId}" for ${operationName}. Expected 1-128 alphanumeric, underscore, or hyphen characters.`
+      );
+    }
+    return trimmedId;
   }
 
   private buildHeaders(
@@ -126,6 +149,8 @@ export class DoitClient {
       method,
       headers: this.buildHeaders(hasBody, options?.includeTenantHeader ?? true),
       body: hasBody ? JSON.stringify(options.body) : undefined,
+      redirect: 'error',
+      signal: AbortSignal.timeout(30_000),
     });
 
     const rawText = await response.text();
@@ -309,10 +334,7 @@ export class DoitClient {
   }
 
   public async getAnnotation(id: string): Promise<AnnotationListItem> {
-    const trimmedId = id?.trim();
-    if (!trimmedId) {
-      throw new Error('Annotation ID is required for getAnnotation.');
-    }
+    const trimmedId = DoitClient.validateAnnotationId(id, 'getAnnotation');
     return this.request<AnnotationListItem>(
       'GET',
       `/analytics/v1/annotations/${encodeURIComponent(trimmedId)}`
@@ -335,10 +357,7 @@ export class DoitClient {
     id: string,
     payload: UpdateAnnotationRequest
   ): Promise<AnnotationListItem> {
-    const trimmedId = id?.trim();
-    if (!trimmedId) {
-      throw new Error('Annotation ID is required for updateAnnotation.');
-    }
+    const trimmedId = DoitClient.validateAnnotationId(id, 'updateAnnotation');
     const body: UpdateAnnotationRequest = {};
     if (payload.content !== undefined) {
       body.content = payload.content;
@@ -365,10 +384,7 @@ export class DoitClient {
   }
 
   public async deleteAnnotation(id: string): Promise<void> {
-    const trimmedId = id?.trim();
-    if (!trimmedId) {
-      throw new Error('Annotation ID is required for deleteAnnotation.');
-    }
+    const trimmedId = DoitClient.validateAnnotationId(id, 'deleteAnnotation');
     await this.request<void>(
       'DELETE',
       `/analytics/v1/annotations/${encodeURIComponent(trimmedId)}`
