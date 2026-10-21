@@ -257,4 +257,54 @@ describe('DoitClient', () => {
       expect(apiErr.message).toContain('***');
     }
   });
+
+  it('falls back to customerContext query param on 403 when tenantId is set and skips labels on 403', async () => {
+    const seenUrls: string[] = [];
+    const mockFetch = createMockFetch(async (url, init) => {
+      seenUrls.push(url);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      // Simulate a legacy Doer API key that returns 403 for X-Tenant-Id unless ?customerContext= is present
+      if (headers['X-Tenant-Id'] && !url.includes('customerContext=')) {
+        return { status: 403, statusText: 'Forbidden', body: { error: 'Forbidden' } };
+      }
+      if (url.includes('/analytics/v1/labels')) {
+        return { status: 403, statusText: 'Forbidden', body: { error: 'Labels Forbidden' } };
+      }
+      if (init?.method === 'POST' && url.includes('/analytics/v1/annotations')) {
+        return {
+          status: 201,
+          body: {
+            id: 'ann_legacy_ok',
+            content: 'Deployed with fallback',
+            timestamp: '2026-10-21T16:00:00.000Z',
+          },
+        };
+      }
+      return { status: 404, body: { error: 'Not found' } };
+    });
+
+    const client = new DoitClient({
+      apiKey: 'legacy_doer_key',
+      tenantId: 'EE8CtpzYiKp0dVAESVrB',
+      fetchImpl: mockFetch,
+    });
+
+    // resolveLabels should gracefully skip 403 on /analytics/v1/labels while preserving explicit id: labels
+    const labels = await client.resolveLabels(['production', 'id:lbl_explicit_1'], {
+      createMissing: true,
+    });
+    expect(labels).toEqual(['lbl_explicit_1']);
+
+    // createAnnotation should succeed via the ?customerContext= fallback when X-Tenant-Id returns 403
+    const created = await client.createAnnotation({
+      content: 'Deployed with fallback',
+      timestamp: '2026-10-21T16:00:00Z',
+    });
+    expect(created.id).toBe('ann_legacy_ok');
+    expect(
+      seenUrls.some((u) =>
+        u.includes('/analytics/v1/annotations?customerContext=EE8CtpzYiKp0dVAESVrB')
+      )
+    ).toBe(true);
+  });
 });

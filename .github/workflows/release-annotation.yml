@@ -20,9 +20,6 @@ jobs:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           tenant-id: ${{ vars.DOIT_TENANT_ID }}
           reports: ${{ vars.DOIT_REPORT_IDS }}
-          labels: 'production, release'
-          create-missing-labels: 'true'
-          label-color: 'blue'
           fail-on-error: 'true'
 
       - name: Print Created Annotation ID
