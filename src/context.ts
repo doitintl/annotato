@@ -204,7 +204,21 @@ export function extractGitHubContext(options?: ExtractContextOptions): GitHubEve
   };
 }
 
+export function extractCleanCommitSubject(rawMessage?: string): string {
+  if (!rawMessage) return '';
+  const lines = rawMessage
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !/^co-authored-by:/i.test(line));
+  if (lines.length === 0) return '';
+  if (/^merge pull request #\d+/i.test(lines[0]) && lines.length > 1) {
+    return lines[1];
+  }
+  return lines[0];
+}
+
 export function interpolateTemplate(template: string, context: GitHubEventContext): string {
+  const cleanMessage = extractCleanCommitSubject(context.commitMessage) || context.release;
   const replacements: Record<string, string> = {
     repo: context.repo,
     release: context.release,
@@ -216,11 +230,15 @@ export function interpolateTemplate(template: string, context: GitHubEventContex
     environment: context.environment,
     url: context.url,
     timestamp: context.timestamp,
+    message: cleanMessage,
   };
 
-  return template.replace(/\{(repo|release|tag|sha|short_sha|actor|event|environment|url|timestamp)\}/g, (_, key: string) => {
-    return replacements[key] ?? '';
-  });
+  return template.replace(
+    /\{(repo|release|tag|sha|short_sha|actor|event|environment|url|timestamp|message)\}/g,
+    (_, key: string) => {
+      return replacements[key] ?? '';
+    }
+  );
 }
 
 export function renderAnnotationContent(
