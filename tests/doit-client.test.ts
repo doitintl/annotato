@@ -23,11 +23,17 @@ function createMockFetch(
 }
 
 describe('DoitClient', () => {
-  it('throws if API key is empty or if a non-HTTPS external baseUrl is provided', () => {
+  it('throws if API key is empty or if a non-HTTPS or non-allowlisted baseUrl is provided', () => {
     expect(() => new DoitClient({ apiKey: '   ' })).toThrow('DoiT API key is required');
     expect(
       () => new DoitClient({ apiKey: 'valid_key', baseUrl: 'http://api.doit.com' })
     ).toThrow('DoiT API base URL must use https://');
+    expect(
+      () => new DoitClient({ apiKey: 'valid_key', baseUrl: 'https://evil.example.com' })
+    ).toThrow('not in the allowlist (*.doit.com)');
+    expect(
+      () => new DoitClient({ apiKey: 'valid_key', baseUrl: 'https://user:pass@api.doit.com' })
+    ).toThrow('must not contain embedded credentials');
     expect(
       () => new DoitClient({ apiKey: 'valid_key', baseUrl: 'http://127.0.0.1:8080' })
     ).not.toThrow();
@@ -98,6 +104,10 @@ describe('DoitClient', () => {
     await expect(
       client.createAnnotation({ content: 'Valid content', timestamp: 'not-a-timestamp' })
     ).rejects.toThrow('Invalid RFC3339 timestamp');
+
+    await expect(client.getAnnotation('../traversal')).rejects.toThrow(
+      'Invalid Annotation ID "../traversal"'
+    );
   });
 
   it('supports getAnnotation, listAnnotations, updateAnnotation (PATCH), and deleteAnnotation', async () => {
