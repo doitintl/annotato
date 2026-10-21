@@ -133,6 +133,9 @@ export async function executeAction(
   if (inputs.doitApiKey) {
     core.setSecret(inputs.doitApiKey);
   }
+  if (inputs.tenantId) {
+    core.setSecret(inputs.tenantId);
+  }
 
   const context = extractGitHubContext({
     env,

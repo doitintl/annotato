@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   deploy-and-annotate:
     name: Deploy & Mark Cost Timeline
@@ -14,7 +17,9 @@ jobs:
 
       # Replace with your actual deployment step
       - name: Deploy application to production
-        run: echo "Deploying commit ${{ github.sha }} to production..."
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: echo "Deploying commit $COMMIT_SHA to production..."
 
       - name: Annotate Deployment in DoiT Cloud Intelligence
         id: annotate

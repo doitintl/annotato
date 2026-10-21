@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   deploy-and-annotate:
     name: Deploy & Mark Cost Timeline
@@ -14,21 +17,26 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Deploy application to production
-        run: echo "Deploying commit ${{ github.sha }} to production..."
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: echo "Deploying commit $COMMIT_SHA to production..."
 
       - name: Annotate Deployment in DoiT Cloud Intelligence
         id: annotate
         uses: ./
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
-          tenant-id: ${{ vars.DOIT_TENANT_ID }}
           release-id: 'prod-${{ github.sha }}'
           reports: ${{ vars.DOIT_REPORT_IDS }}
           template: '🚀 [{repo}] Deployed {release} ({short_sha}) to {environment} by @{actor}'
           fail-on-error: 'true'
 
       - name: Print Created Annotation Details
+        env:
+          ANNOTATION_ID: ${{ steps.annotate.outputs.annotation-id }}
+          ANNOTATION_TIMESTAMP: ${{ steps.annotate.outputs.annotation-timestamp }}
+          ANNOTATION_CONTENT: ${{ steps.annotate.outputs.annotation-content }}
         run: |
-          echo "Created DoiT Annotation ID: ${{ steps.annotate.outputs.annotation-id }}"
-          echo "Timestamp: ${{ steps.annotate.outputs.annotation-timestamp }}"
-          echo "Content: ${{ steps.annotate.outputs.annotation-content }}"
+          echo "Created DoiT Annotation ID: $ANNOTATION_ID"
+          echo "Timestamp: $ANNOTATION_TIMESTAMP"
+          echo "Content: $ANNOTATION_CONTENT"
