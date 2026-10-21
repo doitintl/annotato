@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  evaluateAnnotationFilters,
   extractGitHubContext,
   interpolateTemplate,
   parseCsvList,
@@ -182,5 +183,93 @@ describe('extractGitHubContext and renderAnnotationContent', () => {
     expect(rendered).toBe(
       'org/service|v1.0.0|v1.0.0|1122334455667788|1122334|alice|release|production|https://github.com/org/service/releases/tag/v1.0.0|2026-10-21T10:00:00.000Z'
     );
+  });
+
+  it('evaluates require-tag, require-commit-tag, and require-pr-label filters accurately', () => {
+    const branchPushCtx = extractGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REPOSITORY: 'org/service',
+        GITHUB_REF: 'refs/heads/main',
+      },
+      payload: {
+        ref: 'refs/heads/main',
+        head_commit: {
+          id: '1122334455667788',
+          message: 'chore: bump readme',
+          timestamp: '2026-10-21T10:00:00Z',
+        },
+      },
+    });
+
+    // Fails require-tag when pushing to a branch instead of a v* tag
+    expect(
+      evaluateAnnotationFilters(branchPushCtx, {
+        requireTag: 'v*',
+        requireCommitTag: [],
+        requirePrLabel: [],
+      })
+    ).toEqual({
+      shouldAnnotate: false,
+      skipReason: 'Tag/release "main" did not match require-tag pattern "v*".',
+    });
+
+    // Fails require-commit-tag when commit message lacks [annotate]
+    expect(
+      evaluateAnnotationFilters(branchPushCtx, {
+        requireTag: undefined,
+        requireCommitTag: ['[annotate]', '#finops'],
+        requirePrLabel: [],
+      })
+    ).toEqual({
+      shouldAnnotate: false,
+      skipReason:
+        'Commit/PR message did not contain any required marker ([annotate], #finops).',
+    });
+
+    // Passes require-commit-tag when commit message contains [annotate]
+    const taggedCommitCtx = extractGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REPOSITORY: 'org/service',
+        GITHUB_REF: 'refs/heads/main',
+      },
+      payload: {
+        ref: 'refs/heads/main',
+        head_commit: {
+          id: '1122334455667788',
+          message: 'feat: migrate worker fleet to spot instances [annotate]',
+          timestamp: '2026-10-21T10:00:00Z',
+        },
+      },
+    });
+    expect(
+      evaluateAnnotationFilters(taggedCommitCtx, {
+        requireTag: undefined,
+        requireCommitTag: ['[annotate]'],
+        requirePrLabel: [],
+      })
+    ).toEqual({ shouldAnnotate: true });
+
+    // Evaluates require-pr-label on pull_request events
+    const prCtx = extractGitHubContext({
+      env: {
+        GITHUB_EVENT_NAME: 'pull_request',
+        GITHUB_REPOSITORY: 'org/service',
+      },
+      payload: {
+        pull_request: {
+          title: 'Major infra upgrade',
+          labels: [{ name: 'finops-impact' }, { name: 'infra' }],
+        },
+      },
+    });
+    expect(
+      evaluateAnnotationFilters(prCtx, {
+        requireTag: undefined,
+        requireCommitTag: [],
+        requirePrLabel: ['annotate', 'finops-impact'],
+      })
+    ).toEqual({ shouldAnnotate: true });
   });
 });

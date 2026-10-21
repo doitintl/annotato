@@ -19876,10 +19876,28 @@ function extractGitHubContext(options) {
   const deployment = asRecord(payload.deployment);
   const deploymentStatus = asRecord(payload.deployment_status);
   const releaseObj = asRecord(payload.release);
+  const prObj = asRecord(payload.pull_request);
   const inputsObj = asRecord(payload.inputs);
-  const sha = asString(env.GITHUB_SHA) || asString(headCommit.id) || asString(deployment.sha) || "";
+  const sha = asString(env.GITHUB_SHA) || asString(headCommit.id) || asString(asRecord(prObj.merge_commit_sha)) || asString(prObj.merge_commit_sha) || asString(deployment.sha) || "";
   const shortSha = sha ? sha.slice(0, 7) : "";
-  const refName = asString(env.GITHUB_REF_NAME) || stripRefPrefix(asString(env.GITHUB_REF)) || stripRefPrefix(asString(payload.ref));
+  const rawGithubRef = asString(env.GITHUB_REF);
+  const rawPayloadRef = asString(payload.ref);
+  const isTagRef = asString(env.GITHUB_REF_TYPE) === "tag" || rawGithubRef.startsWith("refs/tags/") || rawPayloadRef.startsWith("refs/tags/") || eventName === "release";
+  const refName = asString(env.GITHUB_REF_NAME) || stripRefPrefix(rawGithubRef) || stripRefPrefix(rawPayloadRef);
+  const messageParts = [
+    asString(headCommit.message),
+    asString(prObj.title),
+    asString(prObj.body),
+    asString(releaseObj.name),
+    asString(releaseObj.body),
+    asString(env.GITHUB_COMMIT_MESSAGE)
+  ].filter(Boolean);
+  const commitMessage = messageParts.join("\n").trim();
+  const rawPrLabels = Array.isArray(prObj.labels) ? prObj.labels.map(
+    (item) => typeof item === "string" ? item.trim() : asString(asRecord(item).name)
+  ).filter(Boolean) : [];
+  const envPrLabels = parseCsvList(asString(env.GITHUB_PR_LABELS));
+  const prLabels = Array.from(/* @__PURE__ */ new Set([...rawPrLabels, ...envPrLabels]));
   const senderObj = asRecord(payload.sender);
   const actor = asString(env.GITHUB_ACTOR) || asString(senderObj.login) || "github-actions";
   const runId = asString(env.GITHUB_RUN_ID);
@@ -19934,7 +19952,10 @@ function extractGitHubContext(options) {
     url,
     timestamp,
     releaseName,
-    releaseBody
+    releaseBody,
+    isTagRef,
+    commitMessage,
+    prLabels
   };
 }
 function interpolateTemplate(template, context) {
@@ -19980,6 +20001,61 @@ function parseCsvList(raw) {
       raw.split(/[,\n]/).map((item) => item.trim()).filter((item) => item.length > 0)
     )
   );
+}
+function matchesGlobPattern(value, pattern) {
+  const escaped = pattern.trim().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
+  return new RegExp(`^${escaped}$`, "i").test(value.trim());
+}
+function evaluateAnnotationFilters(context, inputs) {
+  const rawRequireTag = inputs.requireTag?.trim();
+  if (rawRequireTag) {
+    const normalized = rawRequireTag.toLowerCase();
+    if (["true", "1", "yes", "*"].includes(normalized)) {
+      if (!context.isTagRef) {
+        return {
+          shouldAnnotate: false,
+          skipReason: `Ref "${context.tag}" is not a Git tag or release (require-tag="${rawRequireTag}").`
+        };
+      }
+    } else if (!["false", "0", "no"].includes(normalized)) {
+      const patterns = parseCsvList(rawRequireTag);
+      const candidates = [context.tag, context.release].filter(Boolean);
+      const matched = patterns.some(
+        (pattern) => candidates.some((cand) => matchesGlobPattern(cand, pattern))
+      );
+      if (!matched) {
+        return {
+          shouldAnnotate: false,
+          skipReason: `Tag/release "${context.tag}" did not match require-tag pattern "${rawRequireTag}".`
+        };
+      }
+    }
+  }
+  if (inputs.requireCommitTag && inputs.requireCommitTag.length > 0) {
+    const messageLower = (context.commitMessage || "").toLowerCase();
+    const matchedTag = inputs.requireCommitTag.some(
+      (marker) => messageLower.includes(marker.toLowerCase())
+    );
+    if (!matchedTag) {
+      return {
+        shouldAnnotate: false,
+        skipReason: `Commit/PR message did not contain any required marker (${inputs.requireCommitTag.join(", ")}).`
+      };
+    }
+  }
+  if (inputs.requirePrLabel && inputs.requirePrLabel.length > 0) {
+    const existingLabels = (context.prLabels ?? []).map((l) => l.toLowerCase());
+    const matchedLabel = inputs.requirePrLabel.some(
+      (reqLabel) => existingLabels.includes(reqLabel.toLowerCase())
+    );
+    if (!matchedLabel) {
+      return {
+        shouldAnnotate: false,
+        skipReason: `Pull request labels [${(context.prLabels ?? []).join(", ")}] did not match any required PR label (${inputs.requirePrLabel.join(", ")}).`
+      };
+    }
+  }
+  return { shouldAnnotate: true };
 }
 
 // src/doit-client.ts
@@ -20331,7 +20407,7 @@ function buildStepSummaryMarkdown(result, inputs) {
   const modeSuffix = result.dryRun ? " (Dry Run)" : "";
   lines.push(`## \u{1F4CC} DoiT Cloud Intelligence Annotation${modeSuffix}`);
   lines.push("");
-  const statusText = result.dryRun ? "\u{1F9EA} Dry Run (no API mutation)" : "\u2705 Success";
+  const statusText = result.skipped ? `\u23ED\uFE0F Skipped (${result.skipReason || "filtered"})` : result.dryRun ? "\u{1F9EA} Dry Run (no API mutation)" : "\u2705 Success";
   const actualReports = result.annotation?.reports;
   const reportsText = actualReports !== void 0 ? actualReports.length > 0 ? actualReports.join(", ") : inputs.reports.length > 0 ? "All eligible reports (global fallback)" : "All eligible reports (default)" : inputs.reports.length > 0 ? inputs.reports.join(", ") : "All eligible reports (default)";
   const labelsList = result.resolvedLabels && result.resolvedLabels.length > 0 ? result.resolvedLabels : inputs.labels;
@@ -20463,6 +20539,9 @@ function parseActionInputs(env = process.env) {
   const filter = readRawInput("filter", env) || void 0;
   const rawMaxResults = readRawInput("max-results", env);
   const maxResults = rawMaxResults ? Number.parseInt(rawMaxResults, 10) : void 0;
+  const requireTag = readRawInput("require-tag", env) || void 0;
+  const requireCommitTag = parseCsvList(readRawInput("require-commit-tag", env));
+  const requirePrLabel = parseCsvList(readRawInput("require-pr-label", env));
   return {
     doitApiKey,
     operation,
@@ -20480,7 +20559,10 @@ function parseActionInputs(env = process.env) {
     dryRun,
     failOnError,
     filter,
-    maxResults: Number.isFinite(maxResults) ? maxResults : void 0
+    maxResults: Number.isFinite(maxResults) ? maxResults : void 0,
+    requireTag,
+    requireCommitTag,
+    requirePrLabel
   };
 }
 async function executeAction(inputs, options) {
@@ -20495,6 +20577,21 @@ async function executeAction(inputs, options) {
     releaseIdOverride: inputs.releaseId,
     timestampOverride: inputs.timestamp
   });
+  if (inputs.operation === "create") {
+    const filterResult = evaluateAnnotationFilters(context, inputs);
+    if (!filterResult.shouldAnnotate) {
+      const skippedResult = {
+        operation: inputs.operation,
+        dryRun: inputs.dryRun,
+        skipped: true,
+        skipReason: filterResult.skipReason,
+        context
+      };
+      const markdown2 = buildStepSummaryMarkdown(skippedResult, inputs);
+      writeStepSummary(markdown2, env);
+      return skippedResult;
+    }
+  }
   const renderedContent = renderAnnotationContent(context, {
     content: inputs.content,
     template: inputs.template
@@ -20653,15 +20750,24 @@ async function run(options) {
     core.setOutput("annotation-id", result.annotationId ?? "");
     core.setOutput("annotation-content", result.annotationContent ?? "");
     core.setOutput("annotation-timestamp", result.annotationTimestamp ?? "");
+    core.setOutput("annotation-skipped", result.skipped ? "true" : "false");
     core.setOutput(
       "annotation-json",
       JSON.stringify(
-        result.annotation ?? result.annotations ?? result.requestPayload ?? { id: result.annotationId }
+        result.annotation ?? result.annotations ?? result.requestPayload ?? {
+          id: result.annotationId,
+          skipped: Boolean(result.skipped),
+          skipReason: result.skipReason
+        }
       )
     );
-    core.info(
-      `[Annotato] ${result.dryRun ? "(DRY RUN) " : ""}Operation "${result.operation}" completed${result.annotationId ? ` (id: ${result.annotationId})` : ""}.`
-    );
+    if (result.skipped) {
+      core.info(`[Annotato] Skipped annotation: ${result.skipReason}`);
+    } else {
+      core.info(
+        `[Annotato] ${result.dryRun ? "(DRY RUN) " : ""}Operation "${result.operation}" completed${result.annotationId ? ` (id: ${result.annotationId})` : ""}.`
+      );
+    }
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

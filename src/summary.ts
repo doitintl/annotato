@@ -11,7 +11,11 @@ export function buildStepSummaryMarkdown(result: ActionResult, inputs: ActionInp
   lines.push(`## 📌 DoiT Cloud Intelligence Annotation${modeSuffix}`);
   lines.push('');
 
-  const statusText = result.dryRun ? '🧪 Dry Run (no API mutation)' : '✅ Success';
+  const statusText = result.skipped
+    ? `⏭️ Skipped (${result.skipReason || 'filtered'})`
+    : result.dryRun
+      ? '🧪 Dry Run (no API mutation)'
+      : '✅ Success';
   const actualReports = result.annotation?.reports;
   const reportsText =
     actualReports !== undefined

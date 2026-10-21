@@ -111,6 +111,9 @@ export interface ActionInputs {
   failOnError: boolean;
   filter?: string;
   maxResults?: number;
+  requireTag?: string;
+  requireCommitTag: string[];
+  requirePrLabel: string[];
 }
 
 export interface GitHubEventContext {
@@ -126,11 +129,16 @@ export interface GitHubEventContext {
   timestamp: string;
   releaseName?: string;
   releaseBody?: string;
+  isTagRef?: boolean;
+  commitMessage?: string;
+  prLabels?: string[];
 }
 
 export interface ActionResult {
   operation: AnnotationOperation;
   dryRun: boolean;
+  skipped?: boolean;
+  skipReason?: string;
   annotationId?: string;
   annotationContent?: string;
   annotationTimestamp?: string;

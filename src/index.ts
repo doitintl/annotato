@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import {
+  evaluateAnnotationFilters,
   extractGitHubContext,
   parseCsvList,
   renderAnnotationContent,
@@ -89,6 +90,9 @@ export function parseActionInputs(env: NodeJS.ProcessEnv = process.env): ActionI
   const filter = readRawInput('filter', env) || undefined;
   const rawMaxResults = readRawInput('max-results', env);
   const maxResults = rawMaxResults ? Number.parseInt(rawMaxResults, 10) : undefined;
+  const requireTag = readRawInput('require-tag', env) || undefined;
+  const requireCommitTag = parseCsvList(readRawInput('require-commit-tag', env));
+  const requirePrLabel = parseCsvList(readRawInput('require-pr-label', env));
 
   return {
     doitApiKey,
@@ -108,6 +112,9 @@ export function parseActionInputs(env: NodeJS.ProcessEnv = process.env): ActionI
     failOnError,
     filter,
     maxResults: Number.isFinite(maxResults) ? maxResults : undefined,
+    requireTag,
+    requireCommitTag,
+    requirePrLabel,
   };
 }
 
@@ -134,6 +141,22 @@ export async function executeAction(
     releaseIdOverride: inputs.releaseId,
     timestampOverride: inputs.timestamp,
   });
+
+  if (inputs.operation === 'create') {
+    const filterResult = evaluateAnnotationFilters(context, inputs);
+    if (!filterResult.shouldAnnotate) {
+      const skippedResult: ActionResult = {
+        operation: inputs.operation,
+        dryRun: inputs.dryRun,
+        skipped: true,
+        skipReason: filterResult.skipReason,
+        context,
+      };
+      const markdown = buildStepSummaryMarkdown(skippedResult, inputs);
+      writeStepSummary(markdown, env);
+      return skippedResult;
+    }
+  }
 
   const renderedContent = renderAnnotationContent(context, {
     content: inputs.content,
@@ -321,18 +344,29 @@ export async function run(options?: ExecuteActionOptions): Promise<ActionResult 
     core.setOutput('annotation-id', result.annotationId ?? '');
     core.setOutput('annotation-content', result.annotationContent ?? '');
     core.setOutput('annotation-timestamp', result.annotationTimestamp ?? '');
+    core.setOutput('annotation-skipped', result.skipped ? 'true' : 'false');
     core.setOutput(
       'annotation-json',
       JSON.stringify(
-        result.annotation ?? result.annotations ?? result.requestPayload ?? { id: result.annotationId }
+        result.annotation ??
+          result.annotations ??
+          result.requestPayload ?? {
+            id: result.annotationId,
+            skipped: Boolean(result.skipped),
+            skipReason: result.skipReason,
+          }
       )
     );
 
-    core.info(
-      `[Annotato] ${result.dryRun ? '(DRY RUN) ' : ''}Operation "${result.operation}" completed${
-        result.annotationId ? ` (id: ${result.annotationId})` : ''
-      }.`
-    );
+    if (result.skipped) {
+      core.info(`[Annotato] Skipped annotation: ${result.skipReason}`);
+    } else {
+      core.info(
+        `[Annotato] ${result.dryRun ? '(DRY RUN) ' : ''}Operation "${result.operation}" completed${
+          result.annotationId ? ` (id: ${result.annotationId})` : ''
+        }.`
+      );
+    }
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

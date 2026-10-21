@@ -291,4 +291,37 @@ describe('Annotato Action Runner & Summary', () => {
       expect.stringContaining('Non-fatal error (fail-on-error=false)')
     );
   });
+
+  it('skips creating an annotation without calling the DoiT API when require-commit-tag does not match', async () => {
+    const summaryFile = makeTempSummaryFile();
+    const setOutputSpy = vi.spyOn(core, 'setOutput').mockImplementation(() => {});
+    vi.spyOn(core, 'info').mockImplementation(() => {});
+    const mockFetch = vi.fn();
+
+    const res = await run({
+      env: {
+        'INPUT_DOIT-API-KEY': 'live_secret_token',
+        'INPUT_REQUIRE-COMMIT-TAG': '[annotate], [release]',
+        GITHUB_EVENT_NAME: 'push',
+        GITHUB_REPOSITORY: 'doiteng/annotato',
+        GITHUB_REF: 'refs/heads/main',
+        GITHUB_STEP_SUMMARY: summaryFile,
+      },
+      payload: {
+        ref: 'refs/heads/main',
+        head_commit: {
+          id: 'abcdef1234567890',
+          message: 'chore: routine typo fix',
+          timestamp: '2026-10-21T15:00:00Z',
+        },
+      },
+      fetchImpl: mockFetch as unknown as typeof fetch,
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(res?.skipped).toBe(true);
+    expect(setOutputSpy).toHaveBeenCalledWith('annotation-skipped', 'true');
+    const summaryText = fs.readFileSync(summaryFile, 'utf8');
+    expect(summaryText).toContain('⏭️ Skipped');
+  });
 });

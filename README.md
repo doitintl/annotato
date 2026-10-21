@@ -19,8 +19,9 @@ By placing automated release markers directly on your DoiT Cloud Analytics cost 
 4. [Step 3: Add Annotato to Your GitHub Workflows](#step-3-add-annotato-to-your-github-workflows)
    - [Example 1: Annotate Every Published GitHub Release](#example-1-annotate-every-published-github-release)
    - [Example 2: Annotate Production Deployments on Push to `main`](#example-2-annotate-production-deployments-on-push-to-main)
-   - [Example 3: Update an Existing Annotation on Rollback](#example-3-update-an-existing-annotation-on-rollback)
-   - [Example 4: Dry-Run Testing in Pull Requests](#example-4-dry-run-testing-in-pull-requests)
+   - [Example 3: Filter High-Volume `main` Merges by Tag, Commit Marker, or PR Label](#example-3-filter-high-volume-main-merges-by-tag-commit-marker-or-pr-label)
+   - [Example 4: Update an Existing Annotation on Rollback](#example-4-update-an-existing-annotation-on-rollback)
+   - [Example 5: Dry-Run Testing in Pull Requests](#example-5-dry-run-testing-in-pull-requests)
 5. [Action Inputs Reference](#action-inputs-reference)
 6. [Action Outputs Reference](#action-outputs-reference)
 7. [Template Placeholders & Default Formatting](#template-placeholders--default-formatting)
@@ -163,7 +164,55 @@ jobs:
 
 ---
 
-### Example 3: Update an Existing Annotation on Rollback
+### Example 3: Filter High-Volume `main` Merges by Tag, Commit Marker, or PR Label
+
+If your organization merges dozens or hundreds of commits to `main` each day, annotating every commit can clutter your DoiT Cloud Analytics charts. You can restrict annotations to significant merges using Annotato's built-in filter inputs (`require-commit-tag`, `require-tag`, `require-pr-label`)—when a commit doesn't match, Annotato skips the API call and exits cleanly with `0` (`annotation-skipped: 'true'`):
+
+#### Option A: Only Annotate Commits Containing a Marker (`[annotate]` or `[release]`)
+```yaml
+      - name: Annotate Marked Production Merges in DoiT
+        uses: ericethridge/annotato@main
+        with:
+          doit-api-key: ${{ secrets.DOIT_API_KEY }}
+          # Only creates a DoiT annotation when the commit message or PR title/body contains [annotate] or [release]
+          require-commit-tag: '[annotate], [release]'
+          release-id: 'prod-${{ github.sha }}'
+          template: '🚀 [{repo}] Deployed {release} ({short_sha}) to {environment} by @{actor}'
+```
+
+#### Option B: Only Annotate Git Version Tags (`v*`)
+```yaml
+      - name: Annotate Version Tags Only
+        uses: ericethridge/annotato@main
+        with:
+          doit-api-key: ${{ secrets.DOIT_API_KEY }}
+          # Only creates a DoiT annotation when the tag/release matches v* or prod-*
+          require-tag: 'v*, prod-*'
+```
+
+#### Option C: Only Annotate Merged PRs with a Specific GitHub Label (`annotate` or `finops-impact`)
+```yaml
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+jobs:
+  annotate-merged-pr:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Annotate Labeled PR Merge in DoiT
+        uses: ericethridge/annotato@main
+        with:
+          doit-api-key: ${{ secrets.DOIT_API_KEY }}
+          require-pr-label: 'annotate, finops-impact'
+```
+
+---
+
+### Example 4: Update an Existing Annotation on Rollback
 
 If a deployment fails verification or is rolled back, you can update the annotation created earlier in the workflow (or via manual `workflow_dispatch`) using `operation: 'update'` (see [`examples/rollback-annotation.yml`](examples/rollback-annotation.yml)):
 
@@ -183,7 +232,7 @@ If a deployment fails verification or is rolled back, you can update the annotat
 
 ---
 
-### Example 4: Dry-Run Testing in Pull Requests
+### Example 5: Dry-Run Testing in Pull Requests
 
 Use `dry-run: 'true'` to validate your template formatting and view the generated Markdown table in the GitHub Actions Job Summary without making any network calls to DoiT:
 
@@ -217,6 +266,9 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 | `api-url` | No | `https://api.doit.com` | `DOIT_API_URL` | Base URL for the DoiT Cloud Intelligence API. |
 | `filter` | No | — | `INPUT_FILTER` | Filter expression when `operation` is `list` (e.g. `content:Release\|labels:production`). |
 | `max-results` | No | — | `INPUT_MAX_RESULTS` | Maximum number of annotations to return when `operation` is `list`. |
+| `require-tag` | No | — | `INPUT_REQUIRE_TAG` | Only create an annotation if the Git tag/release matches this glob pattern (e.g. `v*`, `prod-*`, or `true` for any tag/release). Skips cleanly otherwise. |
+| `require-commit-tag` | No | `""` | `INPUT_REQUIRE_COMMIT_TAG` | Comma-separated markers required in the commit message or PR title/body to create an annotation (e.g. `[annotate], [release], #finops`). |
+| `require-pr-label` | No | `""` | `INPUT_REQUIRE_PR_LABEL` | Comma-separated GitHub Pull Request labels required to create an annotation (e.g. `annotate, finops-impact`). |
 | `dry-run` | No | `false` | `INPUT_DRY_RUN` | When `true`, builds the request payload, sets outputs, and writes the Job Summary without calling the DoiT API. |
 | `fail-on-error` | No | `true` | `INPUT_FAIL_ON_ERROR` | When `false`, logs a warning (`::warning::`) instead of failing the workflow step if the DoiT API returns an error. |
 | `tenant-id` | No | — | `DOIT_TENANT_ID` | *(Doers Only)* Optional Customer/Tenant ID sent via the `X-Tenant-Id` header. Customers do not need to set this. See [Doers Only](#doers-only-targeting-a-customer-with-x-tenant-id). |
@@ -230,6 +282,7 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 | `annotation-id` | The unique DoiT ID (`id`) of the created, updated, retrieved, or deleted annotation (or first item on `list`). |
 | `annotation-content` | The final rendered `content` string sent to or returned by DoiT. |
 | `annotation-timestamp` | The normalized RFC3339 UTC `timestamp` string (e.g., `2026-10-21T16:20:00.000Z`). |
+| `annotation-skipped` | `'true'` if annotation creation was skipped by `require-tag`, `require-commit-tag`, or `require-pr-label`; `'false'` otherwise. |
 | `annotation-json` | Full JSON string of the DoiT API response object (or request payload when `dry-run: true`). |
 
 ---

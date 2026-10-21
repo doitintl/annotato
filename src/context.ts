@@ -1,5 +1,5 @@
 import * as fs from 'node:fs';
-import { GitHubEventContext } from './types.js';
+import { ActionInputs, GitHubEventContext } from './types.js';
 
 export interface ExtractContextOptions {
   env?: NodeJS.ProcessEnv;
@@ -71,19 +71,50 @@ export function extractGitHubContext(options?: ExtractContextOptions): GitHubEve
   const deployment = asRecord(payload.deployment);
   const deploymentStatus = asRecord(payload.deployment_status);
   const releaseObj = asRecord(payload.release);
+  const prObj = asRecord(payload.pull_request);
   const inputsObj = asRecord(payload.inputs);
 
   const sha =
     asString(env.GITHUB_SHA) ||
     asString(headCommit.id) ||
+    asString(asRecord(prObj.merge_commit_sha)) ||
+    asString(prObj.merge_commit_sha) ||
     asString(deployment.sha) ||
     '';
   const shortSha = sha ? sha.slice(0, 7) : '';
 
+  const rawGithubRef = asString(env.GITHUB_REF);
+  const rawPayloadRef = asString(payload.ref);
+  const isTagRef =
+    asString(env.GITHUB_REF_TYPE) === 'tag' ||
+    rawGithubRef.startsWith('refs/tags/') ||
+    rawPayloadRef.startsWith('refs/tags/') ||
+    eventName === 'release';
+
   const refName =
     asString(env.GITHUB_REF_NAME) ||
-    stripRefPrefix(asString(env.GITHUB_REF)) ||
-    stripRefPrefix(asString(payload.ref));
+    stripRefPrefix(rawGithubRef) ||
+    stripRefPrefix(rawPayloadRef);
+
+  const messageParts = [
+    asString(headCommit.message),
+    asString(prObj.title),
+    asString(prObj.body),
+    asString(releaseObj.name),
+    asString(releaseObj.body),
+    asString(env.GITHUB_COMMIT_MESSAGE),
+  ].filter(Boolean);
+  const commitMessage = messageParts.join('\n').trim();
+
+  const rawPrLabels = Array.isArray(prObj.labels)
+    ? prObj.labels
+        .map((item) =>
+          typeof item === 'string' ? item.trim() : asString(asRecord(item).name)
+        )
+        .filter(Boolean)
+    : [];
+  const envPrLabels = parseCsvList(asString(env.GITHUB_PR_LABELS));
+  const prLabels = Array.from(new Set([...rawPrLabels, ...envPrLabels]));
 
   const senderObj = asRecord(payload.sender);
   const actor =
@@ -167,6 +198,9 @@ export function extractGitHubContext(options?: ExtractContextOptions): GitHubEve
     timestamp,
     releaseName,
     releaseBody,
+    isTagRef,
+    commitMessage,
+    prLabels,
   };
 }
 
@@ -231,4 +265,71 @@ export function parseCsvList(raw?: string): string[] {
         .filter((item) => item.length > 0)
     )
   );
+}
+
+function matchesGlobPattern(value: string, pattern: string): boolean {
+  const escaped = pattern
+    .trim()
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '.*')
+    .replace(/\?/g, '.');
+  return new RegExp(`^${escaped}$`, 'i').test(value.trim());
+}
+
+export function evaluateAnnotationFilters(
+  context: GitHubEventContext,
+  inputs: Pick<ActionInputs, 'requireTag' | 'requireCommitTag' | 'requirePrLabel'>
+): { shouldAnnotate: boolean; skipReason?: string } {
+  const rawRequireTag = inputs.requireTag?.trim();
+  if (rawRequireTag) {
+    const normalized = rawRequireTag.toLowerCase();
+    if (['true', '1', 'yes', '*'].includes(normalized)) {
+      if (!context.isTagRef) {
+        return {
+          shouldAnnotate: false,
+          skipReason: `Ref "${context.tag}" is not a Git tag or release (require-tag="${rawRequireTag}").`,
+        };
+      }
+    } else if (!['false', '0', 'no'].includes(normalized)) {
+      const patterns = parseCsvList(rawRequireTag);
+      const candidates = [context.tag, context.release].filter(Boolean);
+      const matched = patterns.some((pattern) =>
+        candidates.some((cand) => matchesGlobPattern(cand, pattern))
+      );
+      if (!matched) {
+        return {
+          shouldAnnotate: false,
+          skipReason: `Tag/release "${context.tag}" did not match require-tag pattern "${rawRequireTag}".`,
+        };
+      }
+    }
+  }
+
+  if (inputs.requireCommitTag && inputs.requireCommitTag.length > 0) {
+    const messageLower = (context.commitMessage || '').toLowerCase();
+    const matchedTag = inputs.requireCommitTag.some((marker) =>
+      messageLower.includes(marker.toLowerCase())
+    );
+    if (!matchedTag) {
+      return {
+        shouldAnnotate: false,
+        skipReason: `Commit/PR message did not contain any required marker (${inputs.requireCommitTag.join(', ')}).`,
+      };
+    }
+  }
+
+  if (inputs.requirePrLabel && inputs.requirePrLabel.length > 0) {
+    const existingLabels = (context.prLabels ?? []).map((l) => l.toLowerCase());
+    const matchedLabel = inputs.requirePrLabel.some((reqLabel) =>
+      existingLabels.includes(reqLabel.toLowerCase())
+    );
+    if (!matchedLabel) {
+      return {
+        shouldAnnotate: false,
+        skipReason: `Pull request labels [${(context.prLabels ?? []).join(', ')}] did not match any required PR label (${inputs.requirePrLabel.join(', ')}).`,
+      };
+    }
+  }
+
+  return { shouldAnnotate: true };
 }
