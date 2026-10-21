@@ -20054,39 +20054,56 @@ var DoitClient = class {
       if (response.ok && rawText) {
         const parsed = JSON.parse(rawText);
         const perms = Array.isArray(parsed.permissions) ? parsed.permissions.length > 0 ? parsed.permissions.join(", ") : "none/doer-token" : "unknown";
-        return ` [Token domain=${parsed.domain || "unknown"}, permissions=${perms}]`;
+        return ` [validate=200 domain=${parsed.domain || "unknown"}, email=${parsed.email || "service-account"}, permissions=${perms}]`;
       }
-    } catch {
+      return ` [validate=${response.status}: ${rawText.slice(0, 120)}]`;
+    } catch (err) {
+      return ` [validate=error: ${err instanceof Error ? err.message : String(err)}]`;
     }
-    return "";
   }
   async request(method, path, options) {
+    const attemptLogs = [];
     let { response, rawText } = await this.executeSingleRequest(method, path, {
       query: options?.query,
       body: options?.body,
       includeTenantHeader: true,
       includeCustomerContextQuery: false
     });
-    if (response.status === 403 && this.tenantId) {
-      const legacyAttempt = await this.executeSingleRequest(method, path, {
-        query: options?.query,
-        body: options?.body,
-        includeTenantHeader: false,
-        includeCustomerContextQuery: true
-      });
-      if (legacyAttempt.response.ok) {
-        response = legacyAttempt.response;
-        rawText = legacyAttempt.rawText;
-      } else if (legacyAttempt.response.status === 403) {
-        const directAttempt = await this.executeSingleRequest(method, path, {
-          query: options?.query,
-          body: options?.body,
+    attemptLogs.push(
+      `${this.tenantId ? "X-Tenant-Id" : "default"}->${response.status}(${rawText.slice(0, 80)})`
+    );
+    if (!response.ok && this.tenantId) {
+      const strategies = [
+        {
+          label: "customerContext",
+          includeTenantHeader: false,
+          includeCustomerContextQuery: true
+        },
+        {
+          label: "both",
+          includeTenantHeader: true,
+          includeCustomerContextQuery: true
+        },
+        {
+          label: "noTenantOverride",
           includeTenantHeader: false,
           includeCustomerContextQuery: false
+        }
+      ];
+      for (const strat of strategies) {
+        const nextAttempt = await this.executeSingleRequest(method, path, {
+          query: options?.query,
+          body: options?.body,
+          includeTenantHeader: strat.includeTenantHeader,
+          includeCustomerContextQuery: strat.includeCustomerContextQuery
         });
-        if (directAttempt.response.ok) {
-          response = directAttempt.response;
-          rawText = directAttempt.rawText;
+        attemptLogs.push(
+          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, 80)})`
+        );
+        if (nextAttempt.response.ok) {
+          response = nextAttempt.response;
+          rawText = nextAttempt.rawText;
+          break;
         }
       }
     }
@@ -20097,8 +20114,9 @@ var DoitClient = class {
         errorDetail = parsed.error || parsed.message || rawText;
       } catch {
       }
-      const diagnostics = response.status === 403 && path !== "/auth/v1/validate" ? await this.fetchTokenDiagnostics() : "";
-      const safeDetail = `${errorDetail}${diagnostics}`.split(this.apiKey).join("***");
+      const attemptsSummary = attemptLogs.length > 1 ? ` [attempts: ${attemptLogs.join("; ")}]` : "";
+      const diagnostics = path !== "/auth/v1/validate" ? await this.fetchTokenDiagnostics() : "";
+      const safeDetail = `${errorDetail}${attemptsSummary}${diagnostics}`.split(this.apiKey).join("***");
       throw new DoitApiError(
         `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
         response.status,
@@ -20131,7 +20149,19 @@ var DoitClient = class {
     if (payload.labels && payload.labels.length > 0) {
       body.labels = payload.labels;
     }
-    return this.request("POST", "/analytics/v1/annotations", { body });
+    try {
+      return await this.request("POST", "/analytics/v1/annotations", { body });
+    } catch (err) {
+      if (err instanceof DoitApiError && (err.status === 403 || err.status === 404) && (body.reports?.length || body.labels?.length)) {
+        return await this.request("POST", "/analytics/v1/annotations", {
+          body: {
+            content: body.content,
+            timestamp: body.timestamp
+          }
+        });
+      }
+      throw err;
+    }
   }
   async getAnnotation(id) {
     const trimmedId = id?.trim();

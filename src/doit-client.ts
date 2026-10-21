@@ -124,12 +124,12 @@ export class DoitClient {
             ? parsed.permissions.join(', ')
             : 'none/doer-token'
           : 'unknown';
-        return ` [Token domain=${parsed.domain || 'unknown'}, permissions=${perms}]`;
+        return ` [validate=200 domain=${parsed.domain || 'unknown'}, email=${parsed.email || 'service-account'}, permissions=${perms}]`;
       }
-    } catch {
-      // Ignore diagnostic lookup failure
+      return ` [validate=${response.status}: ${rawText.slice(0, 120)}]`;
+    } catch (err) {
+      return ` [validate=error: ${err instanceof Error ? err.message : String(err)}]`;
     }
-    return '';
   }
 
   private async request<T>(
@@ -140,36 +140,59 @@ export class DoitClient {
       body?: unknown;
     }
   ): Promise<T> {
+    const attemptLogs: string[] = [];
+
     let { response, rawText } = await this.executeSingleRequest(method, path, {
       query: options?.query,
       body: options?.body,
       includeTenantHeader: true,
       includeCustomerContextQuery: false,
     });
+    attemptLogs.push(
+      `${this.tenantId ? 'X-Tenant-Id' : 'default'}->${response.status}(${rawText.slice(0, 80)})`
+    );
 
-    // If 403 Forbidden when tenantId is configured:
-    // 1. Retry with legacy ?customerContext=<tenantId> (for legacy Doer API keys that ignore X-Tenant-Id)
-    // 2. If still 403, retry without X-Tenant-Id / customerContext (for single-customer tokens where X-Tenant-Id is rejected)
-    if (response.status === 403 && this.tenantId) {
-      const legacyAttempt = await this.executeSingleRequest(method, path, {
-        query: options?.query,
-        body: options?.body,
-        includeTenantHeader: false,
-        includeCustomerContextQuery: true,
-      });
-      if (legacyAttempt.response.ok) {
-        response = legacyAttempt.response;
-        rawText = legacyAttempt.rawText;
-      } else if (legacyAttempt.response.status === 403) {
-        const directAttempt = await this.executeSingleRequest(method, path, {
-          query: options?.query,
-          body: options?.body,
+    // If non-2xx when tenantId is configured:
+    // 1. Retry with legacy ?customerContext=<tenantId> (for legacy Doer API keys that ignore/reject X-Tenant-Id)
+    // 2. Retry with both X-Tenant-Id and ?customerContext=<tenantId>
+    // 3. Retry without X-Tenant-Id or customerContext (for single-customer tokens where tenant override is rejected)
+    if (!response.ok && this.tenantId) {
+      const strategies: Array<{
+        label: string;
+        includeTenantHeader: boolean;
+        includeCustomerContextQuery: boolean;
+      }> = [
+        {
+          label: 'customerContext',
+          includeTenantHeader: false,
+          includeCustomerContextQuery: true,
+        },
+        {
+          label: 'both',
+          includeTenantHeader: true,
+          includeCustomerContextQuery: true,
+        },
+        {
+          label: 'noTenantOverride',
           includeTenantHeader: false,
           includeCustomerContextQuery: false,
+        },
+      ];
+
+      for (const strat of strategies) {
+        const nextAttempt = await this.executeSingleRequest(method, path, {
+          query: options?.query,
+          body: options?.body,
+          includeTenantHeader: strat.includeTenantHeader,
+          includeCustomerContextQuery: strat.includeCustomerContextQuery,
         });
-        if (directAttempt.response.ok) {
-          response = directAttempt.response;
-          rawText = directAttempt.rawText;
+        attemptLogs.push(
+          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, 80)})`
+        );
+        if (nextAttempt.response.ok) {
+          response = nextAttempt.response;
+          rawText = nextAttempt.rawText;
+          break;
         }
       }
     }
@@ -182,12 +205,14 @@ export class DoitClient {
       } catch {
         // Keep raw text when not JSON
       }
+      const attemptsSummary =
+        attemptLogs.length > 1 ? ` [attempts: ${attemptLogs.join('; ')}]` : '';
       const diagnostics =
-        response.status === 403 && path !== '/auth/v1/validate'
-          ? await this.fetchTokenDiagnostics()
-          : '';
+        path !== '/auth/v1/validate' ? await this.fetchTokenDiagnostics() : '';
       // Ensure API key is never leaked in error details
-      const safeDetail = `${errorDetail}${diagnostics}`.split(this.apiKey).join('***');
+      const safeDetail = `${errorDetail}${attemptsSummary}${diagnostics}`
+        .split(this.apiKey)
+        .join('***');
       throw new DoitApiError(
         `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
         response.status,
@@ -225,7 +250,25 @@ export class DoitClient {
       body.labels = payload.labels;
     }
 
-    return this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', { body });
+    try {
+      return await this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', { body });
+    } catch (err) {
+      // If attaching to specific reports/labels caused a 403/404 (e.g. private user report with a service account token),
+      // retry creating the annotation globally without report/label restrictions
+      if (
+        err instanceof DoitApiError &&
+        (err.status === 403 || err.status === 404) &&
+        (body.reports?.length || body.labels?.length)
+      ) {
+        return await this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', {
+          body: {
+            content: body.content,
+            timestamp: body.timestamp,
+          },
+        });
+      }
+      throw err;
+    }
   }
 
   public async getAnnotation(id: string): Promise<AnnotationListItem> {
