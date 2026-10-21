@@ -25,9 +25,6 @@ jobs:
           release-id: 'prod-${{ github.sha }}'
           reports: ${{ vars.DOIT_REPORT_IDS }}
           template: '🚀 [{repo}] Deployed {release} ({short_sha}) to {environment} by @{actor}'
-          labels: 'production, deployment'
-          create-missing-labels: 'true'
-          label-color: 'teal'
           fail-on-error: 'true'
 
       - name: Print Created Annotation Details

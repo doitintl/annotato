@@ -58,7 +58,10 @@ export class DoitClient {
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
   }
 
-  private buildHeaders(hasJsonBody: boolean): Record<string, string> {
+  private buildHeaders(
+    hasJsonBody: boolean,
+    includeTenantHeader: boolean = true
+  ): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       Accept: 'application/json',
@@ -66,10 +69,67 @@ export class DoitClient {
     if (hasJsonBody) {
       headers['Content-Type'] = 'application/json';
     }
-    if (this.tenantId) {
+    if (includeTenantHeader && this.tenantId) {
       headers['X-Tenant-Id'] = this.tenantId;
     }
     return headers;
+  }
+
+  private async executeSingleRequest(
+    method: string,
+    path: string,
+    options?: {
+      query?: Record<string, string | number | undefined>;
+      body?: unknown;
+      includeTenantHeader?: boolean;
+      includeCustomerContextQuery?: boolean;
+    }
+  ): Promise<{ response: Response; rawText: string }> {
+    const url = new URL(`${this.baseUrl}${path}`);
+    if (options?.query) {
+      for (const [key, val] of Object.entries(options.query)) {
+        if (val !== undefined && val !== '') {
+          url.searchParams.set(key, String(val));
+        }
+      }
+    }
+    if (options?.includeCustomerContextQuery && this.tenantId) {
+      url.searchParams.set('customerContext', this.tenantId);
+    }
+
+    const hasBody = options?.body !== undefined;
+    const response = await this.fetchImpl(url.toString(), {
+      method,
+      headers: this.buildHeaders(hasBody, options?.includeTenantHeader ?? true),
+      body: hasBody ? JSON.stringify(options.body) : undefined,
+    });
+
+    const rawText = await response.text();
+    return { response, rawText };
+  }
+
+  private async fetchTokenDiagnostics(): Promise<string> {
+    try {
+      const { response, rawText } = await this.executeSingleRequest('GET', '/auth/v1/validate', {
+        includeTenantHeader: false,
+      });
+      if (response.ok && rawText) {
+        const parsed = JSON.parse(rawText) as {
+          domain?: string;
+          email?: string;
+          permissions?: string[];
+        };
+        const perms = Array.isArray(parsed.permissions)
+          ? parsed.permissions.length > 0
+            ? parsed.permissions.join(', ')
+            : 'none/doer-token'
+          : 'unknown';
+        return ` [Token domain=${parsed.domain || 'unknown'}, permissions=${perms}]`;
+      }
+    } catch {
+      // Ignore diagnostic lookup failure
+    }
+    return '';
   }
 
   private async request<T>(
@@ -80,23 +140,40 @@ export class DoitClient {
       body?: unknown;
     }
   ): Promise<T> {
-    const url = new URL(`${this.baseUrl}${path}`);
-    if (options?.query) {
-      for (const [key, val] of Object.entries(options.query)) {
-        if (val !== undefined && val !== '') {
-          url.searchParams.set(key, String(val));
+    let { response, rawText } = await this.executeSingleRequest(method, path, {
+      query: options?.query,
+      body: options?.body,
+      includeTenantHeader: true,
+      includeCustomerContextQuery: false,
+    });
+
+    // If 403 Forbidden when tenantId is configured:
+    // 1. Retry with legacy ?customerContext=<tenantId> (for legacy Doer API keys that ignore X-Tenant-Id)
+    // 2. If still 403, retry without X-Tenant-Id / customerContext (for single-customer tokens where X-Tenant-Id is rejected)
+    if (response.status === 403 && this.tenantId) {
+      const legacyAttempt = await this.executeSingleRequest(method, path, {
+        query: options?.query,
+        body: options?.body,
+        includeTenantHeader: false,
+        includeCustomerContextQuery: true,
+      });
+      if (legacyAttempt.response.ok) {
+        response = legacyAttempt.response;
+        rawText = legacyAttempt.rawText;
+      } else if (legacyAttempt.response.status === 403) {
+        const directAttempt = await this.executeSingleRequest(method, path, {
+          query: options?.query,
+          body: options?.body,
+          includeTenantHeader: false,
+          includeCustomerContextQuery: false,
+        });
+        if (directAttempt.response.ok) {
+          response = directAttempt.response;
+          rawText = directAttempt.rawText;
         }
       }
     }
 
-    const hasBody = options?.body !== undefined;
-    const response = await this.fetchImpl(url.toString(), {
-      method,
-      headers: this.buildHeaders(hasBody),
-      body: hasBody ? JSON.stringify(options.body) : undefined,
-    });
-
-    const rawText = await response.text();
     if (!response.ok) {
       let errorDetail = rawText;
       try {
@@ -105,8 +182,12 @@ export class DoitClient {
       } catch {
         // Keep raw text when not JSON
       }
+      const diagnostics =
+        response.status === 403 && path !== '/auth/v1/validate'
+          ? await this.fetchTokenDiagnostics()
+          : '';
       // Ensure API key is never leaked in error details
-      const safeDetail = errorDetail.split(this.apiKey).join('***');
+      const safeDetail = `${errorDetail}${diagnostics}`.split(this.apiKey).join('***');
       throw new DoitApiError(
         `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
         response.status,
@@ -277,22 +358,30 @@ export class DoitClient {
         continue;
       }
 
-      const searchResult = await this.listLabels({ nameContains: entry, maxResults: 50 });
-      const labels = searchResult.labels ?? [];
-      const exactMatch = labels.find(
-        (lbl) => lbl.name.toLowerCase() === entry.toLowerCase() || lbl.id === entry
-      );
+      try {
+        const searchResult = await this.listLabels({ nameContains: entry, maxResults: 50 });
+        const labels = searchResult.labels ?? [];
+        const exactMatch = labels.find(
+          (lbl) => lbl.name.toLowerCase() === entry.toLowerCase() || lbl.id === entry
+        );
 
-      if (exactMatch) {
-        resolvedIds.push(exactMatch.id);
-      } else if (options?.createMissing) {
-        const created = await this.createLabel({
-          name: entry,
-          color: defaultColor,
-        });
-        resolvedIds.push(created.id);
-      } else {
-        resolvedIds.push(entry);
+        if (exactMatch) {
+          resolvedIds.push(exactMatch.id);
+        } else if (options?.createMissing) {
+          const created = await this.createLabel({
+            name: entry,
+            color: defaultColor,
+          });
+          resolvedIds.push(created.id);
+        } else {
+          resolvedIds.push(entry);
+        }
+      } catch (err) {
+        if (err instanceof DoitApiError && err.status === 403) {
+          // Token lacks Labels API permission; skip label lookup/creation so annotation creation can still proceed
+          continue;
+        }
+        throw err;
       }
     }
 
