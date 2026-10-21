@@ -1,0 +1,32 @@
+name: Annotate Release in DoiT Cloud Intelligence
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  annotate-release:
+    name: Create DoiT Release Annotation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Record Release on DoiT Cloud Analytics Timeline
+        id: doit_annotation
+        uses: ./
+        with:
+          doit-api-key: ${{ secrets.DOIT_API_KEY }}
+          tenant-id: ${{ vars.DOIT_TENANT_ID }}
+          reports: ${{ vars.DOIT_REPORT_IDS }}
+          labels: 'production, release'
+          create-missing-labels: 'true'
+          label-color: 'blue'
+          fail-on-error: 'true'
+
+      - name: Print Created Annotation ID
+        run: |
+          echo "Created DoiT Annotation ID: ${{ steps.doit_annotation.outputs.annotation-id }}"
+          echo "Timestamp: ${{ steps.doit_annotation.outputs.annotation-timestamp }}"
+          echo "Content: ${{ steps.doit_annotation.outputs.annotation-content }}"

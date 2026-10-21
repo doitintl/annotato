@@ -1,0 +1,37 @@
+name: Deploy to Production & Annotate DoiT
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-and-annotate:
+    name: Deploy & Mark Cost Timeline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy application to production
+        run: echo "Deploying commit ${{ github.sha }} to production..."
+
+      - name: Annotate Deployment in DoiT Cloud Intelligence
+        id: annotate
+        uses: ./
+        with:
+          doit-api-key: ${{ secrets.DOIT_API_KEY }}
+          tenant-id: ${{ vars.DOIT_TENANT_ID }}
+          release-id: 'prod-${{ github.sha }}'
+          reports: ${{ vars.DOIT_REPORT_IDS }}
+          template: '🚀 [{repo}] Deployed {release} ({short_sha}) to {environment} by @{actor}'
+          labels: 'production, deployment'
+          create-missing-labels: 'true'
+          label-color: 'teal'
+          fail-on-error: 'true'
+
+      - name: Print Created Annotation Details
+        run: |
+          echo "Created DoiT Annotation ID: ${{ steps.annotate.outputs.annotation-id }}"
+          echo "Timestamp: ${{ steps.annotate.outputs.annotation-timestamp }}"
+          echo "Content: ${{ steps.annotate.outputs.annotation-content }}"
