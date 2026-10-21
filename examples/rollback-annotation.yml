@@ -12,6 +12,9 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: read
+
 jobs:
   rollback-annotation:
     name: Update DoiT Annotation for Rollback

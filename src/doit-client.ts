@@ -55,10 +55,31 @@ export class DoitClient {
       throw new Error('DoiT API key is required and cannot be empty.');
     }
     this.apiKey = trimmedKey;
-    this.baseUrl = (options.baseUrl?.trim() || 'https://api.doit.com').replace(/\/+$/, '');
+    this.baseUrl = DoitClient.normalizeBaseUrl(options.baseUrl);
     this.tenantId = options.tenantId?.trim() || undefined;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
     this.onWarning = options.onWarning;
+  }
+
+  private static normalizeBaseUrl(rawBaseUrl?: string): string {
+    const candidate = (rawBaseUrl?.trim() || 'https://api.doit.com').replace(/\/+$/, '');
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new Error(`Invalid DoiT API base URL: "${candidate}"`);
+    }
+    const isLoopback =
+      parsed.hostname === '127.0.0.1' ||
+      parsed.hostname === 'localhost' ||
+      parsed.hostname === '::1' ||
+      parsed.hostname === '[::1]';
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
+      throw new Error(
+        `DoiT API base URL must use https:// (received "${parsed.protocol}//${parsed.hostname}").`
+      );
+    }
+    return candidate;
   }
 
   private buildHeaders(
@@ -130,8 +151,6 @@ export class DoitClient {
       }
       if (response.ok && rawText) {
         const parsed = JSON.parse(rawText) as {
-          domain?: string;
-          email?: string;
           permissions?: string[];
         };
         const perms = Array.isArray(parsed.permissions)
@@ -139,7 +158,7 @@ export class DoitClient {
             ? parsed.permissions.join(', ')
             : 'none/doer-token'
           : 'unknown';
-        return ` [validate=200 domain=${parsed.domain || 'unknown'}, email=${parsed.email || 'service-account'}, permissions=${perms}]`;
+        return ` [validate=200 permissions=${perms}]`;
       }
       return ` [validate=${response.status}: ${rawText.slice(0, 120)}]`;
     } catch (err) {

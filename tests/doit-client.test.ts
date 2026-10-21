@@ -23,8 +23,14 @@ function createMockFetch(
 }
 
 describe('DoitClient', () => {
-  it('throws if API key is empty', () => {
+  it('throws if API key is empty or if a non-HTTPS external baseUrl is provided', () => {
     expect(() => new DoitClient({ apiKey: '   ' })).toThrow('DoiT API key is required');
+    expect(
+      () => new DoitClient({ apiKey: 'valid_key', baseUrl: 'http://api.doit.com' })
+    ).toThrow('DoiT API base URL must use https://');
+    expect(
+      () => new DoitClient({ apiKey: 'valid_key', baseUrl: 'http://127.0.0.1:8080' })
+    ).not.toThrow();
   });
 
   it('creates an annotation with Authorization Bearer and X-Tenant-Id headers', async () => {
@@ -285,7 +291,7 @@ describe('DoitClient', () => {
 
     const client = new DoitClient({
       apiKey: 'legacy_doer_key',
-      tenantId: 'EE8CtpzYiKp0dVAESVrB',
+      tenantId: 'tenant_test_123',
       fetchImpl: mockFetch,
     });
 
@@ -303,7 +309,7 @@ describe('DoitClient', () => {
     expect(created.id).toBe('ann_legacy_ok');
     expect(
       seenUrls.some((u) =>
-        u.includes('/analytics/v1/annotations?customerContext=EE8CtpzYiKp0dVAESVrB')
+        u.includes('/analytics/v1/annotations?customerContext=tenant_test_123')
       )
     ).toBe(true);
   });

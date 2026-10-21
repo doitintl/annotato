@@ -12,7 +12,7 @@ By placing automated release markers directly on your DoiT Cloud Analytics cost 
 
 1. [How It Works](#how-it-works)
 2. [Step 1: Configure DoiT Cloud Intelligence](#step-1-configure-doit-cloud-intelligence)
-   - [Create a DoiT API Token (Service Account vs. Personal Token)](#1-create-a-doit-api-token-service-account-vs-personal-token)
+   - [Create a DoiT Service Account API Token](#1-create-a-doit-service-account-api-token)
    - [Required DoiT Permissions](#2-required-doit-permissions)
    - [Finding DoiT Report IDs & Labels (Optional)](#3-finding-doit-report-ids--labels-optional)
 3. [Step 2: Configure GitHub Secrets & Variables](#step-2-configure-github-secrets--variables)
@@ -28,7 +28,6 @@ By placing automated release markers directly on your DoiT Cloud Analytics cost 
 8. [Label Resolution & Auto-Creation](#label-resolution--auto-creation)
 9. [Local CLI Usage & Development](#local-cli-usage--development)
 10. [Troubleshooting](#troubleshooting)
-11. [Doers Only: Targeting a Customer with `X-Tenant-Id`](#doers-only-targeting-a-customer-with-x-tenant-id)
 
 ---
 
@@ -44,24 +43,24 @@ By placing automated release markers directly on your DoiT Cloud Analytics cost 
 
 ## Step 1: Configure DoiT Cloud Intelligence
 
-### 1. Create a DoiT API Token (Service Account vs. Personal Token)
+### 1. Create a DoiT Service Account API Token
 
-Per the [DoiT API Getting Started Guide](https://developer.doit.com/docs/start), DoiT supports two types of API tokens. Your customer context is resolved automatically from your token:
+Per the [DoiT API Getting Started Guide](https://developer.doit.com/docs/start), CI/CD pipelines should authenticate using a **Service Account API Token** so your automation is scoped to your organization and never depends on an individual engineer's user account:
 
-| Token Type | Best For | How to Create in the DoiT Console |
-| :--- | :--- | :--- |
-| **Service Account API Token** *(Recommended for GitHub Actions)* | Shared CI/CD pipelines that should continue working even if an individual engineer changes roles or leaves your organization. | 1. Sign in to the [DoiT Console](https://app.doit.com/profile/api).<br>2. Click the **gear icon** (Settings) in the top navigation bar and select **Users and access**.<br>3. Select **Service Accounts** in the left-hand menu.<br>4. Select (or create) a service account and click **Create API token**. |
-| **Personal API Token** | Individual testing, personal repositories, or scripts tied to your user account. | 1. Sign in to the [DoiT Console](https://app.doit.com/profile/api).<br>2. Click your **avatar** in the upper-right corner and select your name.<br>3. Open the **API** tab and click **Create API token**. |
+1. Sign in to the [DoiT Console](https://app.doit.com/profile/api).
+2. Click the **gear icon** (Settings) in the top navigation bar and select **Users and access**.
+3. Select **Service Accounts** in the left-hand menu.
+4. Select an existing service account (or create a new one) with the permissions listed below, and click **Create API token**.
 
 > **Important Note on Service Accounts & Report Visibility**:
-> Service accounts do not have a personal user email. If you attach annotations to specific reports using the `reports` input with a Service Account API token, those reports must be **shared organization-wide** or be **preset reports**. Private user-only reports are not accessible to service account tokens.
+> Service accounts do not have a personal user email. If you attach annotations to specific reports using the `reports` input, those reports must be **shared organization-wide** (e.g., **Editor** or **Viewer** public access in the report's **Share** menu) or be **preset reports**. Private user-only reports are not accessible to service account tokens.
 
 ### 2. Required DoiT Permissions
 
-Ensure the user or service account that owns the API token has the appropriate role/permissions in DoiT:
-- **Create annotations (`operation: create`)**: Requires the **Cloud Analytics Admin** permission.
+Ensure your Service Account has the appropriate permissions in DoiT:
+- **Create or delete annotations (`operation: create` / `delete`)**: Requires the **Cloud Analytics Admin** permission.
 - **Update annotations (`operation: update`)**: Requires being the annotation owner or having the **Editor** permission.
-- **Delete annotations (`operation: delete`)**: Requires being the annotation owner or having the **Cloud Analytics Admin** permission.
+- **Create missing labels (`create-missing-labels: 'true'`)**: Requires the **Labels Manager** permission.
 
 ### 3. Finding DoiT Report IDs & Labels (Optional)
 
@@ -80,7 +79,7 @@ In your GitHub repository (or organization settings):
 1. Navigate to **Settings → Secrets and variables → Actions**.
 2. Under the **Secrets** tab, click **New repository secret**:
    - **Name**: `DOIT_API_KEY`
-   - **Secret**: Paste your DoiT Service Account or Personal API token.
+   - **Secret**: Paste your DoiT Service Account API token.
 3. *(Optional)* Under the **Variables** tab, add:
    - `DOIT_REPORT_IDS`: Comma-separated list of DoiT Cloud Analytics report IDs (e.g., `HmqMNr1uIMQQySpiBWyt,2fhAJPvPz950syFUh0Zw`) if you want annotations scoped to specific reports by default.
 
@@ -116,10 +115,14 @@ jobs:
           fail-on-error: 'false'
 
       - name: Print Created Annotation Details
+        env:
+          ANNOTATION_ID: ${{ steps.doit_annotation.outputs.annotation-id }}
+          ANNOTATION_TIMESTAMP: ${{ steps.doit_annotation.outputs.annotation-timestamp }}
+          ANNOTATION_CONTENT: ${{ steps.doit_annotation.outputs.annotation-content }}
         run: |
-          echo "Created DoiT Annotation ID: ${{ steps.doit_annotation.outputs.annotation-id }}"
-          echo "Timestamp: ${{ steps.doit_annotation.outputs.annotation-timestamp }}"
-          echo "Content: ${{ steps.doit_annotation.outputs.annotation-content }}"
+          echo "Created DoiT Annotation ID: $ANNOTATION_ID"
+          echo "Timestamp: $ANNOTATION_TIMESTAMP"
+          echo "Content: $ANNOTATION_CONTENT"
 ```
 
 When you publish release `v2.4.0`, Annotato automatically creates an annotation at the release's `published_at` timestamp with content:
@@ -147,7 +150,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Deploy application to production
-        run: echo "Deploying commit ${{ github.sha }} to production..."
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: echo "Deploying commit $COMMIT_SHA to production..."
 
       - name: Annotate Deployment in DoiT Cloud Intelligence
         id: annotate
@@ -271,7 +276,6 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 | `require-pr-label` | No | `""` | `INPUT_REQUIRE_PR_LABEL` | Comma-separated GitHub Pull Request labels required to create an annotation (e.g. `annotate, finops-impact`). |
 | `dry-run` | No | `false` | `INPUT_DRY_RUN` | When `true`, builds the request payload, sets outputs, and writes the Job Summary without calling the DoiT API. |
 | `fail-on-error` | No | `true` | `INPUT_FAIL_ON_ERROR` | When `false`, logs a warning (`::warning::`) instead of failing the workflow step if the DoiT API returns an error. |
-| `tenant-id` | No | — | `DOIT_TENANT_ID` | *(Doers Only)* Optional Customer/Tenant ID sent via the `X-Tenant-Id` header. Customers do not need to set this. See [Doers Only](#doers-only-targeting-a-customer-with-x-tenant-id). |
 
 ---
 
@@ -367,47 +371,3 @@ node dist/index.js
 | **`404 Not Found` / Report not found** when using a Service Account | Target report in `reports` is a private user report. | Service accounts have no user email and can only access **preset reports** or reports **shared organization-wide** in DoiT Cloud Analytics. Share the report with your organization in the DoiT Console. |
 | **Workflow fails during DoiT maintenance** | `fail-on-error` defaults to `'true'`. | Set `fail-on-error: 'false'` in your workflow step so annotation errors are logged as GitHub warnings without blocking your deployment pipeline. |
 
----
-
-## Doers Only: Targeting a Customer with `X-Tenant-Id`
-
-> **Note for Customers**: You can skip this section. Standard customer Personal API tokens and Service Account tokens are automatically scoped to your DoiT organization—you never need to provide a Tenant ID.
-
-If you are a **Doer** (DoiT employee, CRE, TAM, or Solutions Architect) or operating an internal DoiT multi-tenant token that needs to create or manage annotations on behalf of a specific customer tenant, you must pass the customer's Tenant ID so Annotato sends the `X-Tenant-Id` HTTP header.
-
-### Finding the Customer Tenant ID
-1. Open the customer's account in the [DoiT Console](https://console.doit.com/).
-2. Copy the Tenant / Customer ID from the console URL path following `/customers/<TENANT_ID>/...` (for example: `https://console.doit.com/customers/12345abcde/analytics/reports`).
-
-### Configuring `X-Tenant-Id` in GitHub Actions or CLI
-
-Always authenticate with `Authorization: Bearer <token>` (`doit-api-key`) **in addition to** setting the Tenant ID. (`X-Tenant-Id` supersedes the legacy `customerContext` query parameter, which is ignored by personal and service account tokens.)
-
-1. **Via the Action `tenant-id` input**:
-   ```yaml
-   - name: Annotate Release for Customer Tenant
-     uses: ericethridge/annotato@main
-     with:
-       doit-api-key: ${{ secrets.DOIT_API_KEY }}
-       tenant-id: ${{ vars.DOIT_TENANT_ID }} # Sends header: X-Tenant-Id: <TENANT_ID>
-       reports: ${{ vars.DOIT_REPORT_IDS }}
-       labels: 'production, release'
-       create-missing-labels: 'true'
-   ```
-2. **Via the `DOIT_TENANT_ID` environment variable**:
-   ```yaml
-   - name: Annotate Release for Customer Tenant
-     uses: ericethridge/annotato@main
-     env:
-       DOIT_API_KEY: ${{ secrets.DOIT_API_KEY }}
-       DOIT_TENANT_ID: ${{ vars.DOIT_TENANT_ID }}
-   ```
-3. **Via the local CLI**:
-   ```bash
-   DOIT_API_KEY="your-doer-api-key" \
-   DOIT_TENANT_ID="target-customer-tenant-id" \
-   INPUT_RELEASE_ID="v1.2.3" \
-   GITHUB_REPOSITORY="customer-org/app" \
-   GITHUB_EVENT_NAME="release" \
-   node dist/index.js
-   ```

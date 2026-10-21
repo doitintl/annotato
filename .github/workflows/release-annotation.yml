@@ -5,6 +5,9 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   annotate-release:
     name: Create DoiT Release Annotation
@@ -18,12 +21,15 @@ jobs:
         uses: ./
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
-          tenant-id: ${{ vars.DOIT_TENANT_ID }}
           reports: ${{ vars.DOIT_REPORT_IDS }}
           fail-on-error: 'true'
 
       - name: Print Created Annotation ID
+        env:
+          ANNOTATION_ID: ${{ steps.doit_annotation.outputs.annotation-id }}
+          ANNOTATION_TIMESTAMP: ${{ steps.doit_annotation.outputs.annotation-timestamp }}
+          ANNOTATION_CONTENT: ${{ steps.doit_annotation.outputs.annotation-content }}
         run: |
-          echo "Created DoiT Annotation ID: ${{ steps.doit_annotation.outputs.annotation-id }}"
-          echo "Timestamp: ${{ steps.doit_annotation.outputs.annotation-timestamp }}"
-          echo "Content: ${{ steps.doit_annotation.outputs.annotation-content }}"
+          echo "Created DoiT Annotation ID: $ANNOTATION_ID"
+          echo "Timestamp: $ANNOTATION_TIMESTAMP"
+          echo "Content: $ANNOTATION_CONTENT"
