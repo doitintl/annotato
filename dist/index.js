@@ -20002,6 +20002,7 @@ var DoitClient = class {
   baseUrl;
   tenantId;
   fetchImpl;
+  onWarning;
   constructor(options) {
     const trimmedKey = options.apiKey?.trim();
     if (!trimmedKey) {
@@ -20011,6 +20012,7 @@ var DoitClient = class {
     this.baseUrl = (options.baseUrl?.trim() || "https://api.doit.com").replace(/\/+$/, "");
     this.tenantId = options.tenantId?.trim() || void 0;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.onWarning = options.onWarning;
   }
   buildHeaders(hasJsonBody, includeTenantHeader = true) {
     const headers = {
@@ -20084,7 +20086,7 @@ var DoitClient = class {
     attemptLogs.push(
       `${this.tenantId ? "X-Tenant-Id" : "default"}->${response.status}(${rawText.slice(0, 80)})`
     );
-    if (!response.ok && this.tenantId) {
+    if ((response.status === 401 || response.status === 403) && this.tenantId) {
       const strategies = [
         {
           label: "customerContext",
@@ -20165,6 +20167,9 @@ var DoitClient = class {
       return await this.request("POST", "/analytics/v1/annotations", { body });
     } catch (err) {
       if (err instanceof DoitApiError && (err.status === 403 || err.status === 404) && (body.reports?.length || body.labels?.length)) {
+        this.onWarning?.(
+          `[Annotato] Attaching annotation to specified reports/labels returned HTTP ${err.status}; retrying as a global annotation without report/label restrictions.`
+        );
         return await this.request("POST", "/analytics/v1/annotations", {
           body: {
             content: body.content,
@@ -20304,6 +20309,9 @@ var DoitClient = class {
         }
       } catch (err) {
         if (err instanceof DoitApiError && err.status === 403) {
+          this.onWarning?.(
+            `[Annotato] Skipping label resolution for "${entry}" because /analytics/v1/labels returned 403 Forbidden.`
+          );
           continue;
         }
         throw err;
@@ -20324,7 +20332,8 @@ function buildStepSummaryMarkdown(result, inputs) {
   lines.push(`## \u{1F4CC} DoiT Cloud Intelligence Annotation${modeSuffix}`);
   lines.push("");
   const statusText = result.dryRun ? "\u{1F9EA} Dry Run (no API mutation)" : "\u2705 Success";
-  const reportsText = inputs.reports.length > 0 ? inputs.reports.join(", ") : "All eligible reports (default)";
+  const actualReports = result.annotation?.reports;
+  const reportsText = actualReports !== void 0 ? actualReports.length > 0 ? actualReports.join(", ") : inputs.reports.length > 0 ? "All eligible reports (global fallback)" : "All eligible reports (default)" : inputs.reports.length > 0 ? inputs.reports.join(", ") : "All eligible reports (default)";
   const labelsList = result.resolvedLabels && result.resolvedLabels.length > 0 ? result.resolvedLabels : inputs.labels;
   const labelsText = labelsList.length > 0 ? labelsList.join(", ") : "None";
   lines.push("| Field | Value |");
@@ -20525,7 +20534,8 @@ async function executeAction(inputs, options) {
     apiKey: inputs.doitApiKey,
     baseUrl: inputs.apiUrl,
     tenantId: inputs.tenantId,
-    fetchImpl: options?.fetchImpl
+    fetchImpl: options?.fetchImpl,
+    onWarning: (msg) => core.warning(msg)
   });
   let result;
   if (inputs.operation === "create") {

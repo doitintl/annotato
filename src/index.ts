@@ -185,6 +185,7 @@ export async function executeAction(
     baseUrl: inputs.apiUrl,
     tenantId: inputs.tenantId,
     fetchImpl: options?.fetchImpl,
+    onWarning: (msg: string) => core.warning(msg),
   });
 
   let result: ActionResult;

@@ -18,7 +18,7 @@ jobs:
 
       - name: Annotate Deployment in DoiT Cloud Intelligence
         id: annotate
-        uses: doiteng/annotato@v1
+        uses: ericethridge/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           release-id: 'prod-${{ github.sha }}'

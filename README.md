@@ -105,7 +105,7 @@ jobs:
     steps:
       - name: Record Release on DoiT Cloud Analytics Timeline
         id: doit_annotation
-        uses: doiteng/annotato@v1
+        uses: ericethridge/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           reports: ${{ vars.DOIT_REPORT_IDS }}
@@ -150,7 +150,7 @@ jobs:
 
       - name: Annotate Deployment in DoiT Cloud Intelligence
         id: annotate
-        uses: doiteng/annotato@v1
+        uses: ericethridge/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           release-id: 'prod-${{ github.sha }}'
@@ -170,7 +170,7 @@ If a deployment fails verification or is rolled back, you can update the annotat
 ```yaml
       - name: Update DoiT Annotation After Rollback
         if: failure() && steps.annotate.outputs.annotation-id != ''
-        uses: doiteng/annotato@v1
+        uses: ericethridge/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           operation: 'update'
@@ -189,7 +189,7 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 
 ```yaml
       - name: Preview DoiT Annotation Payload (Dry Run)
-        uses: doiteng/annotato@v1
+        uses: ericethridge/annotato@main
         with:
           doit-api-key: 'dry-run-placeholder'
           dry-run: 'true'
@@ -333,7 +333,7 @@ Always authenticate with `Authorization: Bearer <token>` (`doit-api-key`) **in a
 1. **Via the Action `tenant-id` input**:
    ```yaml
    - name: Annotate Release for Customer Tenant
-     uses: doiteng/annotato@v1
+     uses: ericethridge/annotato@main
      with:
        doit-api-key: ${{ secrets.DOIT_API_KEY }}
        tenant-id: ${{ vars.DOIT_TENANT_ID }} # Sends header: X-Tenant-Id: <TENANT_ID>
@@ -344,7 +344,7 @@ Always authenticate with `Authorization: Bearer <token>` (`doit-api-key`) **in a
 2. **Via the `DOIT_TENANT_ID` environment variable**:
    ```yaml
    - name: Annotate Release for Customer Tenant
-     uses: doiteng/annotato@v1
+     uses: ericethridge/annotato@main
      env:
        DOIT_API_KEY: ${{ secrets.DOIT_API_KEY }}
        DOIT_TENANT_ID: ${{ vars.DOIT_TENANT_ID }}
