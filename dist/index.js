@@ -3161,7 +3161,17 @@ function extractGitHubContext(options) {
     prLabels
   };
 }
+function extractCleanCommitSubject(rawMessage) {
+  if (!rawMessage) return "";
+  const lines = rawMessage.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0 && !/^co-authored-by:/i.test(line));
+  if (lines.length === 0) return "";
+  if (/^merge pull request #\d+/i.test(lines[0]) && lines.length > 1) {
+    return lines[1];
+  }
+  return lines[0];
+}
 function interpolateTemplate(template, context) {
+  const cleanMessage = extractCleanCommitSubject(context.commitMessage) || context.release;
   const replacements = {
     repo: context.repo,
     release: context.release,
@@ -3172,11 +3182,15 @@ function interpolateTemplate(template, context) {
     event: context.eventName,
     environment: context.environment,
     url: context.url,
-    timestamp: context.timestamp
+    timestamp: context.timestamp,
+    message: cleanMessage
   };
-  return template.replace(/\{(repo|release|tag|sha|short_sha|actor|event|environment|url|timestamp)\}/g, (_, key) => {
-    return replacements[key] ?? "";
-  });
+  return template.replace(
+    /\{(repo|release|tag|sha|short_sha|actor|event|environment|url|timestamp|message)\}/g,
+    (_, key) => {
+      return replacements[key] ?? "";
+    }
+  );
 }
 function renderAnnotationContent(context, options) {
   if (options?.content?.trim()) {

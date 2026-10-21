@@ -1,3 +1,4 @@
+// Allowed DoiT Cloud Intelligence label color palette
 export const DOIT_LABEL_COLORS = [
   'blue',
   'skyBlue',

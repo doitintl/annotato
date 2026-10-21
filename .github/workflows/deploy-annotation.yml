@@ -28,7 +28,7 @@ jobs:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           release-id: 'prod-${{ github.sha }}'
           reports: ${{ vars.DOIT_REPORT_IDS }}
-          template: '🚀 [{repo}] Deployed {release} ({short_sha}) to {environment} by @{actor}'
+          template: '{message}'
           fail-on-error: 'true'
 
       - name: Print Created Annotation Details
