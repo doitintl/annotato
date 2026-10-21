@@ -1,0 +1,79 @@
+name: 'Annotato - DoiT Release Annotation'
+description: 'Automatically create and manage DoiT Cloud Intelligence timeline annotations from GitHub releases and deployments'
+author: 'DoiT International'
+branding:
+  icon: 'bookmark'
+  color: 'blue'
+
+inputs:
+  doit-api-key:
+    description: 'DoiT Cloud Intelligence API key (requires Cloud Analytics Admin permission for creating/deleting annotations)'
+    required: true
+  operation:
+    description: 'Annotation operation to perform: create, update, delete, get, or list'
+    required: false
+    default: 'create'
+  annotation-id:
+    description: 'Target DoiT annotation ID (required for update, delete, and get operations)'
+    required: false
+  release-id:
+    description: 'Explicit release version or identifier (overrides auto-detected GitHub release tag or ref)'
+    required: false
+  content:
+    description: 'Explicit annotation content string (supports {repo}, {release}, {tag}, {sha}, {short_sha}, {actor}, {event}, {environment}, {url}, {timestamp} placeholders)'
+    required: false
+  template:
+    description: 'Custom template for formatting annotation content when content is not explicitly set'
+    required: false
+  timestamp:
+    description: 'Explicit ISO-8601 / RFC3339 date-time for the annotation (defaults to the GitHub event timestamp or current UTC time)'
+    required: false
+  reports:
+    description: 'Comma- or newline-separated list of DoiT Cloud Analytics report IDs to attach the annotation to'
+    required: false
+  labels:
+    description: 'Comma- or newline-separated list of DoiT label names or label IDs to associate with the annotation'
+    required: false
+  create-missing-labels:
+    description: 'Automatically create any label names that do not yet exist in DoiT via POST /analytics/v1/labels'
+    required: false
+    default: 'false'
+  label-color:
+    description: 'Default DoiT color when creating missing labels (blue, skyBlue, teal, mint, lime, softYellow, apricot, lavender, purple, rosePink, slateGrey)'
+    required: false
+    default: 'blue'
+  tenant-id:
+    description: 'Optional customer/tenant ID sent via the X-Tenant-Id header for multi-tenant or service account tokens'
+    required: false
+  api-url:
+    description: 'Base URL for the DoiT API'
+    required: false
+    default: 'https://api.doit.com'
+  filter:
+    description: 'Filter expression when operation is list (e.g., content:Release|labels:production)'
+    required: false
+  max-results:
+    description: 'Maximum number of annotations to return when operation is list'
+    required: false
+  dry-run:
+    description: 'If true, formats the annotation payload and writes outputs/summary without making mutating API calls'
+    required: false
+    default: 'false'
+  fail-on-error:
+    description: 'If false, logs a warning instead of failing the GitHub Action step when the DoiT API returns an error'
+    required: false
+    default: 'true'
+
+outputs:
+  annotation-id:
+    description: 'The ID of the created, updated, retrieved, or deleted DoiT annotation'
+  annotation-content:
+    description: 'The rendered content string of the annotation'
+  annotation-timestamp:
+    description: 'The normalized RFC3339 UTC timestamp of the annotation'
+  annotation-json:
+    description: 'Full JSON string of the annotation response or dry-run payload'
+
+runs:
+  using: 'node24'
+  main: 'dist/index.js'

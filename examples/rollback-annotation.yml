@@ -1,0 +1,30 @@
+name: Rollback & Update DoiT Annotation
+
+on:
+  workflow_dispatch:
+    inputs:
+      annotation_id:
+        description: 'Existing DoiT Annotation ID to mark as rolled back'
+        required: true
+        type: string
+      rollback_version:
+        description: 'Version being rolled back'
+        required: true
+        type: string
+
+jobs:
+  rollback-annotation:
+    name: Update DoiT Annotation for Rollback
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Existing DoiT Annotation
+        uses: doiteng/annotato@v1
+        with:
+          doit-api-key: ${{ secrets.DOIT_API_KEY }}
+          operation: 'update'
+          annotation-id: ${{ inputs.annotation_id }}
+          release-id: ${{ inputs.rollback_version }}
+          content: '⚠️ [{repo}] Release {release} rolled back by @{actor} ({url})'
+          labels: 'production, rollback'
+          create-missing-labels: 'true'
+          label-color: 'rosePink'

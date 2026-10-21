@@ -1,0 +1,33 @@
+{
+  "name": "annotato",
+  "version": "1.0.0",
+  "description": "GitHub Action and CLI that records GitHub releases and deployments as timestamped annotations in DoiT Cloud Intelligence",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --target=node24 --format=cjs --outfile=dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "vitest run",
+    "verify": "npm run typecheck && npm run build && npm test"
+  },
+  "keywords": [
+    "github-actions",
+    "doit",
+    "finops",
+    "annotations",
+    "cloud-analytics",
+    "releases",
+    "deployments"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

@@ -1,0 +1,301 @@
+import {
+  AnnotationListItem,
+  AnnotationListResponse,
+  CreateAnnotationRequest,
+  CreateLabelRequest,
+  DoitErrorResponse,
+  LabelColor,
+  LabelListItem,
+  LabelListResponse,
+  ListAnnotationsParams,
+  ListLabelsParams,
+  UpdateAnnotationRequest,
+} from './types.js';
+
+export interface DoitClientOptions {
+  apiKey: string;
+  baseUrl?: string;
+  tenantId?: string;
+  fetchImpl?: typeof fetch;
+}
+
+export class DoitApiError extends Error {
+  public readonly status: number;
+  public readonly statusText: string;
+  public readonly endpoint: string;
+  public readonly details?: string;
+
+  constructor(
+    message: string,
+    status: number,
+    statusText: string,
+    endpoint: string,
+    details?: string
+  ) {
+    super(message);
+    this.name = 'DoitApiError';
+    this.status = status;
+    this.statusText = statusText;
+    this.endpoint = endpoint;
+    this.details = details;
+  }
+}
+
+export class DoitClient {
+  private readonly apiKey: string;
+  private readonly baseUrl: string;
+  private readonly tenantId?: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: DoitClientOptions) {
+    const trimmedKey = options.apiKey?.trim();
+    if (!trimmedKey) {
+      throw new Error('DoiT API key is required and cannot be empty.');
+    }
+    this.apiKey = trimmedKey;
+    this.baseUrl = (options.baseUrl?.trim() || 'https://api.doit.com').replace(/\/+$/, '');
+    this.tenantId = options.tenantId?.trim() || undefined;
+    this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+  }
+
+  private buildHeaders(hasJsonBody: boolean): Record<string, string> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+      Accept: 'application/json',
+    };
+    if (hasJsonBody) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (this.tenantId) {
+      headers['X-Tenant-Id'] = this.tenantId;
+    }
+    return headers;
+  }
+
+  private async request<T>(
+    method: string,
+    path: string,
+    options?: {
+      query?: Record<string, string | number | undefined>;
+      body?: unknown;
+    }
+  ): Promise<T> {
+    const url = new URL(`${this.baseUrl}${path}`);
+    if (options?.query) {
+      for (const [key, val] of Object.entries(options.query)) {
+        if (val !== undefined && val !== '') {
+          url.searchParams.set(key, String(val));
+        }
+      }
+    }
+
+    const hasBody = options?.body !== undefined;
+    const response = await this.fetchImpl(url.toString(), {
+      method,
+      headers: this.buildHeaders(hasBody),
+      body: hasBody ? JSON.stringify(options.body) : undefined,
+    });
+
+    const rawText = await response.text();
+    if (!response.ok) {
+      let errorDetail = rawText;
+      try {
+        const parsed = JSON.parse(rawText) as DoitErrorResponse;
+        errorDetail = parsed.error || parsed.message || rawText;
+      } catch {
+        // Keep raw text when not JSON
+      }
+      // Ensure API key is never leaked in error details
+      const safeDetail = errorDetail.split(this.apiKey).join('***');
+      throw new DoitApiError(
+        `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
+        response.status,
+        response.statusText,
+        path,
+        safeDetail
+      );
+    }
+
+    if (!rawText) {
+      return undefined as T;
+    }
+
+    return JSON.parse(rawText) as T;
+  }
+
+  public async createAnnotation(payload: CreateAnnotationRequest): Promise<AnnotationListItem> {
+    const content = payload.content?.trim();
+    if (!content) {
+      throw new Error('Annotation content is required.');
+    }
+    const timestamp = payload.timestamp?.trim();
+    if (!timestamp || Number.isNaN(Date.parse(timestamp))) {
+      throw new Error(`Invalid RFC3339 timestamp for annotation: "${payload.timestamp}"`);
+    }
+
+    const body: CreateAnnotationRequest = {
+      content,
+      timestamp: new Date(timestamp).toISOString(),
+    };
+    if (payload.reports && payload.reports.length > 0) {
+      body.reports = payload.reports;
+    }
+    if (payload.labels && payload.labels.length > 0) {
+      body.labels = payload.labels;
+    }
+
+    return this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', { body });
+  }
+
+  public async getAnnotation(id: string): Promise<AnnotationListItem> {
+    const trimmedId = id?.trim();
+    if (!trimmedId) {
+      throw new Error('Annotation ID is required for getAnnotation.');
+    }
+    return this.request<AnnotationListItem>(
+      'GET',
+      `/analytics/v1/annotations/${encodeURIComponent(trimmedId)}`
+    );
+  }
+
+  public async listAnnotations(params?: ListAnnotationsParams): Promise<AnnotationListResponse> {
+    return this.request<AnnotationListResponse>('GET', '/analytics/v1/annotations', {
+      query: {
+        maxResults: params?.maxResults,
+        pageToken: params?.pageToken,
+        filter: params?.filter,
+        sortBy: params?.sortBy,
+        sortOrder: params?.sortOrder,
+      },
+    });
+  }
+
+  public async updateAnnotation(
+    id: string,
+    payload: UpdateAnnotationRequest
+  ): Promise<AnnotationListItem> {
+    const trimmedId = id?.trim();
+    if (!trimmedId) {
+      throw new Error('Annotation ID is required for updateAnnotation.');
+    }
+    const body: UpdateAnnotationRequest = {};
+    if (payload.content !== undefined) {
+      body.content = payload.content;
+    }
+    if (payload.timestamp !== undefined) {
+      if (payload.timestamp !== null && Number.isNaN(Date.parse(payload.timestamp))) {
+        throw new Error(`Invalid RFC3339 timestamp for updateAnnotation: "${payload.timestamp}"`);
+      }
+      body.timestamp =
+        payload.timestamp !== null ? new Date(payload.timestamp).toISOString() : null;
+    }
+    if (payload.reports !== undefined) {
+      body.reports = payload.reports;
+    }
+    if (payload.labels !== undefined) {
+      body.labels = payload.labels;
+    }
+
+    return this.request<AnnotationListItem>(
+      'PATCH',
+      `/analytics/v1/annotations/${encodeURIComponent(trimmedId)}`,
+      { body }
+    );
+  }
+
+  public async deleteAnnotation(id: string): Promise<void> {
+    const trimmedId = id?.trim();
+    if (!trimmedId) {
+      throw new Error('Annotation ID is required for deleteAnnotation.');
+    }
+    await this.request<void>(
+      'DELETE',
+      `/analytics/v1/annotations/${encodeURIComponent(trimmedId)}`
+    );
+  }
+
+  public async listLabels(params?: ListLabelsParams): Promise<LabelListResponse> {
+    return this.request<LabelListResponse>('GET', '/analytics/v1/labels', {
+      query: {
+        maxResults: params?.maxResults,
+        pageToken: params?.pageToken,
+        filter: params?.filter,
+        nameContains: params?.nameContains,
+        sortBy: params?.sortBy,
+        sortOrder: params?.sortOrder,
+      },
+    });
+  }
+
+  public async createLabel(payload: CreateLabelRequest): Promise<LabelListItem> {
+    const name = payload.name?.trim();
+    if (!name) {
+      throw new Error('Label name is required.');
+    }
+    return this.request<LabelListItem>('POST', '/analytics/v1/labels', {
+      body: {
+        name,
+        color: payload.color || 'blue',
+      },
+    });
+  }
+
+  /**
+   * Resolves an array of label identifiers (either human-readable label names or DoiT label IDs)
+   * into DoiT label IDs suitable for CreateAnnotationRequest / UpdateAnnotationRequest.
+   *
+   * - Prefixing an entry with `id:` (e.g. `id:utHqK0OmwbPy1au3Xy22`) bypasses lookup.
+   * - Otherwise, searches GET /analytics/v1/labels?nameContains=<entry> for a case-insensitive
+   *   name match or exact ID match.
+   * - If no match is found and `options.createMissing` is true, creates the label via
+   *   POST /analytics/v1/labels with `options.defaultColor` (defaults to 'blue').
+   * - If no match is found and `options.createMissing` is false, passes the value through as a raw label ID.
+   */
+  public async resolveLabels(
+    inputs: string[],
+    options?: {
+      createMissing?: boolean;
+      defaultColor?: LabelColor;
+    }
+  ): Promise<string[]> {
+    const cleaned = Array.from(
+      new Set(inputs.map((item) => item.trim()).filter((item) => item.length > 0))
+    );
+    if (cleaned.length === 0) {
+      return [];
+    }
+
+    const resolvedIds: string[] = [];
+    const defaultColor: LabelColor = options?.defaultColor ?? 'blue';
+
+    for (const entry of cleaned) {
+      if (entry.startsWith('id:')) {
+        const explicitId = entry.slice(3).trim();
+        if (explicitId) {
+          resolvedIds.push(explicitId);
+        }
+        continue;
+      }
+
+      const searchResult = await this.listLabels({ nameContains: entry, maxResults: 50 });
+      const labels = searchResult.labels ?? [];
+      const exactMatch = labels.find(
+        (lbl) => lbl.name.toLowerCase() === entry.toLowerCase() || lbl.id === entry
+      );
+
+      if (exactMatch) {
+        resolvedIds.push(exactMatch.id);
+      } else if (options?.createMissing) {
+        const created = await this.createLabel({
+          name: entry,
+          color: defaultColor,
+        });
+        resolvedIds.push(created.id);
+      } else {
+        resolvedIds.push(entry);
+      }
+    }
+
+    return Array.from(new Set(resolvedIds));
+  }
+}
