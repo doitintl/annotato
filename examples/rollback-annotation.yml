@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Update Existing DoiT Annotation
-        uses: doiteng/annotato@v1
+        uses: ericethridge/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           operation: 'update'

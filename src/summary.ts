@@ -11,9 +11,22 @@ export function buildStepSummaryMarkdown(result: ActionResult, inputs: ActionInp
   lines.push(`## 📌 DoiT Cloud Intelligence Annotation${modeSuffix}`);
   lines.push('');
 
-  const statusText = result.dryRun ? '🧪 Dry Run (no API mutation)' : '✅ Success';
+  const statusText = result.skipped
+    ? `⏭️ Skipped (${result.skipReason || 'filtered'})`
+    : result.dryRun
+      ? '🧪 Dry Run (no API mutation)'
+      : '✅ Success';
+  const actualReports = result.annotation?.reports;
   const reportsText =
-    inputs.reports.length > 0 ? inputs.reports.join(', ') : 'All eligible reports (default)';
+    actualReports !== undefined
+      ? actualReports.length > 0
+        ? actualReports.join(', ')
+        : inputs.reports.length > 0
+          ? 'All eligible reports (global fallback)'
+          : 'All eligible reports (default)'
+      : inputs.reports.length > 0
+        ? inputs.reports.join(', ')
+        : 'All eligible reports (default)';
   const labelsList =
     result.resolvedLabels && result.resolvedLabels.length > 0
       ? result.resolvedLabels

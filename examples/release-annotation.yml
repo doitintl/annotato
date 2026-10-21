@@ -11,7 +11,7 @@ jobs:
     steps:
       - name: Record Release on DoiT Cloud Analytics Timeline
         id: doit_annotation
-        uses: doiteng/annotato@v1
+        uses: ericethridge/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           # Optional: attach to specific Cloud Analytics report IDs (comma-separated)

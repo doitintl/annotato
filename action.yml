@@ -55,6 +55,15 @@ inputs:
   max-results:
     description: 'Maximum number of annotations to return when operation is list'
     required: false
+  require-tag:
+    description: 'Only create an annotation if the Git tag or release matches this glob pattern (e.g., "v*", "prod-*", or "true" for any tag/release)'
+    required: false
+  require-commit-tag:
+    description: 'Comma- or newline-separated markers required in the commit message or PR title/body to trigger an annotation (e.g., "[annotate], [release], #finops")'
+    required: false
+  require-pr-label:
+    description: 'Comma- or newline-separated GitHub Pull Request labels required to trigger an annotation (e.g., "annotate, release")'
+    required: false
   dry-run:
     description: 'If true, formats the annotation payload and writes outputs/summary without making mutating API calls'
     required: false
@@ -73,6 +82,8 @@ outputs:
     description: 'The normalized RFC3339 UTC timestamp of the annotation'
   annotation-json:
     description: 'Full JSON string of the annotation response or dry-run payload'
+  annotation-skipped:
+    description: 'Whether annotation creation was skipped due to require-tag, require-commit-tag, or require-pr-label filters ("true" or "false")'
 
 runs:
   using: 'node24'

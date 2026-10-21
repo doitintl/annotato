@@ -17,6 +17,7 @@ export interface DoitClientOptions {
   baseUrl?: string;
   tenantId?: string;
   fetchImpl?: typeof fetch;
+  onWarning?: (message: string) => void;
 }
 
 export class DoitApiError extends Error {
@@ -46,6 +47,7 @@ export class DoitClient {
   private readonly baseUrl: string;
   private readonly tenantId?: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly onWarning?: (message: string) => void;
 
   constructor(options: DoitClientOptions) {
     const trimmedKey = options.apiKey?.trim();
@@ -56,6 +58,7 @@ export class DoitClient {
     this.baseUrl = (options.baseUrl?.trim() || 'https://api.doit.com').replace(/\/+$/, '');
     this.tenantId = options.tenantId?.trim() || undefined;
     this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
+    this.onWarning = options.onWarning;
   }
 
   private buildHeaders(
@@ -164,11 +167,11 @@ export class DoitClient {
       `${this.tenantId ? 'X-Tenant-Id' : 'default'}->${response.status}(${rawText.slice(0, 80)})`
     );
 
-    // If non-2xx when tenantId is configured:
+    // If 401/403 when tenantId is configured:
     // 1. Retry with legacy ?customerContext=<tenantId> (for legacy Doer API keys that ignore/reject X-Tenant-Id)
     // 2. Retry with both X-Tenant-Id and ?customerContext=<tenantId>
     // 3. Retry without X-Tenant-Id or customerContext (for single-customer tokens where tenant override is rejected)
-    if (!response.ok && this.tenantId) {
+    if ((response.status === 401 || response.status === 403) && this.tenantId) {
       const strategies: Array<{
         label: string;
         includeTenantHeader: boolean;
@@ -272,6 +275,9 @@ export class DoitClient {
         (err.status === 403 || err.status === 404) &&
         (body.reports?.length || body.labels?.length)
       ) {
+        this.onWarning?.(
+          `[Annotato] Attaching annotation to specified reports/labels returned HTTP ${err.status}; retrying as a global annotation without report/label restrictions.`
+        );
         return await this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', {
           body: {
             content: body.content,
@@ -434,6 +440,9 @@ export class DoitClient {
       } catch (err) {
         if (err instanceof DoitApiError && err.status === 403) {
           // Token lacks Labels API permission; skip label lookup/creation so annotation creation can still proceed
+          this.onWarning?.(
+            `[Annotato] Skipping label resolution for "${entry}" because /analytics/v1/labels returned 403 Forbidden.`
+          );
           continue;
         }
         throw err;
