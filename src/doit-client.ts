@@ -3,6 +3,7 @@ import {
   AnnotationListResponse,
   CreateAnnotationRequest,
   CreateLabelRequest,
+  DEFAULT_API_URL,
   DoitErrorResponse,
   LabelColor,
   LabelListItem,
@@ -12,6 +13,13 @@ import {
   UpdateAnnotationRequest,
 } from './types.js';
 import { trimTrailingSlashes } from './utils.js';
+
+const REQUEST_TIMEOUT_MS = 30_000;
+const LABEL_SEARCH_PAGE_SIZE = 50;
+const ANNOTATION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+const FALLBACK_CUSTOMER_CONTEXT = 'doit.com';
+const ATTEMPT_LOG_SNIPPET_LENGTH = 80;
+const DIAGNOSTICS_SNIPPET_LENGTH = 120;
 
 export interface DoitClientOptions {
   apiKey: string;
@@ -63,7 +71,7 @@ export class DoitClient {
   }
 
   private static normalizeBaseUrl(rawBaseUrl?: string): string {
-    const candidate = trimTrailingSlashes(rawBaseUrl?.trim() || 'https://api.doit.com');
+    const candidate = trimTrailingSlashes(rawBaseUrl?.trim() || DEFAULT_API_URL);
     let parsed: URL;
     try {
       parsed = new URL(candidate);
@@ -98,7 +106,7 @@ export class DoitClient {
     if (!trimmedId) {
       throw new Error(`Annotation ID is required for ${operationName}.`);
     }
-    if (!/^[A-Za-z0-9_-]{1,128}$/.test(trimmedId)) {
+    if (!ANNOTATION_ID_PATTERN.test(trimmedId)) {
       throw new Error(
         `Invalid Annotation ID "${trimmedId}" for ${operationName}. Expected 1-128 alphanumeric, underscore, or hyphen characters.`
       );
@@ -151,7 +159,7 @@ export class DoitClient {
       headers: this.buildHeaders(hasBody, options?.includeTenantHeader ?? true),
       body: hasBody ? JSON.stringify(options.body) : undefined,
       redirect: 'error',
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
     const rawText = await response.text();
@@ -166,7 +174,7 @@ export class DoitClient {
       });
       if (!response.ok) {
         const fallback = await this.executeSingleRequest('GET', '/auth/v1/validate', {
-          query: { customerContext: 'doit.com' },
+          query: { customerContext: FALLBACK_CUSTOMER_CONTEXT },
           includeTenantHeader: false,
           includeCustomerContextQuery: false,
         });
@@ -186,7 +194,7 @@ export class DoitClient {
           : 'unknown';
         return ` [validate=200 permissions=${perms}]`;
       }
-      return ` [validate=${response.status}: ${rawText.slice(0, 120)}]`;
+      return ` [validate=${response.status}: ${rawText.slice(0, DIAGNOSTICS_SNIPPET_LENGTH)}]`;
     } catch (err) {
       return ` [validate=error: ${err instanceof Error ? err.message : String(err)}]`;
     }
@@ -209,7 +217,7 @@ export class DoitClient {
       includeCustomerContextQuery: false,
     });
     attemptLogs.push(
-      `${this.tenantId ? 'X-Tenant-Id' : 'default'}->${response.status}(${rawText.slice(0, 80)})`
+      `${this.tenantId ? 'X-Tenant-Id' : 'default'}->${response.status}(${rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
     );
 
     // If 401/403 when tenantId is configured:
@@ -247,7 +255,7 @@ export class DoitClient {
           includeCustomerContextQuery: strat.includeCustomerContextQuery,
         });
         attemptLogs.push(
-          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, 80)})`
+          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
         );
         if (nextAttempt.response.ok) {
           response = nextAttempt.response;
@@ -419,15 +427,11 @@ export class DoitClient {
   }
 
   /**
-   * Resolves an array of label identifiers (either human-readable label names or DoiT label IDs)
-   * into DoiT label IDs suitable for CreateAnnotationRequest / UpdateAnnotationRequest.
+   * Resolves label names or IDs into label IDs.
    *
-   * - Prefixing an entry with `id:` (e.g. `id:utHqK0OmwbPy1au3Xy22`) bypasses lookup.
-   * - Otherwise, searches GET /analytics/v1/labels?nameContains=<entry> for a case-insensitive
-   *   name match or exact ID match.
-   * - If no match is found and `options.createMissing` is true, creates the label via
-   *   POST /analytics/v1/labels with `options.defaultColor` (defaults to 'blue').
-   * - If no match is found and `options.createMissing` is false, passes the value through as a raw label ID.
+   * - `id:<value>` entries bypass lookup.
+   * - Unmatched entries are created when `createMissing` is set, otherwise passed through as raw IDs.
+   * - A 403 from the labels API skips that entry so annotation creation can still proceed.
    */
   public async resolveLabels(
     inputs: string[],
@@ -456,7 +460,7 @@ export class DoitClient {
       }
 
       try {
-        const searchResult = await this.listLabels({ nameContains: entry, maxResults: 50 });
+        const searchResult = await this.listLabels({ nameContains: entry, maxResults: LABEL_SEARCH_PAGE_SIZE });
         const labels = searchResult.labels ?? [];
         const exactMatch = labels.find(
           (lbl) => lbl.name.toLowerCase() === entry.toLowerCase() || lbl.id === entry

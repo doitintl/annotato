@@ -78,7 +78,6 @@ export function extractGitHubContext(options?: ExtractContextOptions): GitHubEve
   const sha =
     asString(env.GITHUB_SHA) ||
     asString(headCommit.id) ||
-    asString(asRecord(prObj.merge_commit_sha)) ||
     asString(prObj.merge_commit_sha) ||
     asString(deployment.sha) ||
     '';

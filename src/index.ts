@@ -12,10 +12,14 @@ import {
   ActionResult,
   AnnotationOperation,
   CreateAnnotationRequest,
+  DEFAULT_API_URL,
   DOIT_LABEL_COLORS,
   LabelColor,
   UpdateAnnotationRequest,
 } from './types.js';
+
+const MIN_MAX_RESULTS = 1;
+const MAX_MAX_RESULTS = 500;
 
 const VALID_OPERATIONS: readonly AnnotationOperation[] = [
   'create',
@@ -84,7 +88,7 @@ export function parseActionInputs(env: NodeJS.ProcessEnv = process.env): ActionI
   const apiUrl =
     readRawInput('api-url', env) ||
     (env.DOIT_API_URL ? env.DOIT_API_URL.trim() : '') ||
-    'https://api.doit.com';
+    DEFAULT_API_URL;
   const dryRun = parseBoolean(readRawInput('dry-run', env), false);
   const failOnError = parseBoolean(readRawInput('fail-on-error', env), true);
   const filter = readRawInput('filter', env) || undefined;
@@ -92,9 +96,9 @@ export function parseActionInputs(env: NodeJS.ProcessEnv = process.env): ActionI
   let maxResults: number | undefined;
   if (rawMaxResults) {
     const parsedMax = Number.parseInt(rawMaxResults, 10);
-    if (!Number.isInteger(parsedMax) || parsedMax < 1 || parsedMax > 500) {
+    if (!Number.isInteger(parsedMax) || parsedMax < MIN_MAX_RESULTS || parsedMax > MAX_MAX_RESULTS) {
       throw new Error(
-        `Invalid max-results "${rawMaxResults}". Expected an integer between 1 and 500.`
+        `Invalid max-results "${rawMaxResults}". Expected an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}.`
       );
     }
     maxResults = parsedMax;
