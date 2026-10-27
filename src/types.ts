@@ -1,3 +1,5 @@
+export const DEFAULT_API_URL = 'https://api.doit.com';
+
 // Allowed DoiT Cloud Intelligence label color palette
 export const DOIT_LABEL_COLORS = [
   'blue',

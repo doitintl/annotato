@@ -3031,9 +3031,10 @@ var core = __toESM(require_core());
 var fs = __toESM(require("node:fs"));
 
 // src/utils.ts
+var SLASH_CHAR_CODE = 47;
 function trimTrailingSlashes(value) {
   let end = value.length;
-  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  while (end > 0 && value.charCodeAt(end - 1) === SLASH_CHAR_CODE) end--;
   return value.slice(0, end);
 }
 
@@ -3090,7 +3091,7 @@ function extractGitHubContext(options) {
   const releaseObj = asRecord(payload.release);
   const prObj = asRecord(payload.pull_request);
   const inputsObj = asRecord(payload.inputs);
-  const sha = asString(env.GITHUB_SHA) || asString(headCommit.id) || asString(asRecord(prObj.merge_commit_sha)) || asString(prObj.merge_commit_sha) || asString(deployment.sha) || "";
+  const sha = asString(env.GITHUB_SHA) || asString(headCommit.id) || asString(prObj.merge_commit_sha) || asString(deployment.sha) || "";
   const shortSha = sha ? sha.slice(0, 7) : "";
   const rawGithubRef = asString(env.GITHUB_REF);
   const rawPayloadRef = asString(payload.ref);
@@ -3284,7 +3285,29 @@ function evaluateAnnotationFilters(context, inputs) {
   return { shouldAnnotate: true };
 }
 
+// src/types.ts
+var DEFAULT_API_URL = "https://api.doit.com";
+var DOIT_LABEL_COLORS = [
+  "blue",
+  "skyBlue",
+  "teal",
+  "mint",
+  "lime",
+  "softYellow",
+  "apricot",
+  "lavender",
+  "purple",
+  "rosePink",
+  "slateGrey"
+];
+
 // src/doit-client.ts
+var REQUEST_TIMEOUT_MS = 3e4;
+var LABEL_SEARCH_PAGE_SIZE = 50;
+var ANNOTATION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+var FALLBACK_CUSTOMER_CONTEXT = "doit.com";
+var ATTEMPT_LOG_SNIPPET_LENGTH = 80;
+var DIAGNOSTICS_SNIPPET_LENGTH = 120;
 var DoitApiError = class extends Error {
   status;
   statusText;
@@ -3317,7 +3340,7 @@ var DoitClient = class _DoitClient {
     this.onWarning = options.onWarning;
   }
   static normalizeBaseUrl(rawBaseUrl) {
-    const candidate = trimTrailingSlashes(rawBaseUrl?.trim() || "https://api.doit.com");
+    const candidate = trimTrailingSlashes(rawBaseUrl?.trim() || DEFAULT_API_URL);
     let parsed;
     try {
       parsed = new URL(candidate);
@@ -3347,7 +3370,7 @@ var DoitClient = class _DoitClient {
     if (!trimmedId) {
       throw new Error(`Annotation ID is required for ${operationName}.`);
     }
-    if (!/^[A-Za-z0-9_-]{1,128}$/.test(trimmedId)) {
+    if (!ANNOTATION_ID_PATTERN.test(trimmedId)) {
       throw new Error(
         `Invalid Annotation ID "${trimmedId}" for ${operationName}. Expected 1-128 alphanumeric, underscore, or hyphen characters.`
       );
@@ -3385,7 +3408,7 @@ var DoitClient = class _DoitClient {
       headers: this.buildHeaders(hasBody, options?.includeTenantHeader ?? true),
       body: hasBody ? JSON.stringify(options.body) : void 0,
       redirect: "error",
-      signal: AbortSignal.timeout(3e4)
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
     });
     const rawText = await response.text();
     return { response, rawText };
@@ -3398,7 +3421,7 @@ var DoitClient = class _DoitClient {
       });
       if (!response.ok) {
         const fallback = await this.executeSingleRequest("GET", "/auth/v1/validate", {
-          query: { customerContext: "doit.com" },
+          query: { customerContext: FALLBACK_CUSTOMER_CONTEXT },
           includeTenantHeader: false,
           includeCustomerContextQuery: false
         });
@@ -3412,7 +3435,7 @@ var DoitClient = class _DoitClient {
         const perms = Array.isArray(parsed.permissions) ? parsed.permissions.length > 0 ? parsed.permissions.join(", ") : "none/doer-token" : "unknown";
         return ` [validate=200 permissions=${perms}]`;
       }
-      return ` [validate=${response.status}: ${rawText.slice(0, 120)}]`;
+      return ` [validate=${response.status}: ${rawText.slice(0, DIAGNOSTICS_SNIPPET_LENGTH)}]`;
     } catch (err) {
       return ` [validate=error: ${err instanceof Error ? err.message : String(err)}]`;
     }
@@ -3426,7 +3449,7 @@ var DoitClient = class _DoitClient {
       includeCustomerContextQuery: false
     });
     attemptLogs.push(
-      `${this.tenantId ? "X-Tenant-Id" : "default"}->${response.status}(${rawText.slice(0, 80)})`
+      `${this.tenantId ? "X-Tenant-Id" : "default"}->${response.status}(${rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
     );
     if ((response.status === 401 || response.status === 403) && this.tenantId) {
       const strategies = [
@@ -3454,7 +3477,7 @@ var DoitClient = class _DoitClient {
           includeCustomerContextQuery: strat.includeCustomerContextQuery
         });
         attemptLogs.push(
-          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, 80)})`
+          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
         );
         if (nextAttempt.response.ok) {
           response = nextAttempt.response;
@@ -3596,15 +3619,11 @@ var DoitClient = class _DoitClient {
     });
   }
   /**
-   * Resolves an array of label identifiers (either human-readable label names or DoiT label IDs)
-   * into DoiT label IDs suitable for CreateAnnotationRequest / UpdateAnnotationRequest.
+   * Resolves label names or IDs into label IDs.
    *
-   * - Prefixing an entry with `id:` (e.g. `id:utHqK0OmwbPy1au3Xy22`) bypasses lookup.
-   * - Otherwise, searches GET /analytics/v1/labels?nameContains=<entry> for a case-insensitive
-   *   name match or exact ID match.
-   * - If no match is found and `options.createMissing` is true, creates the label via
-   *   POST /analytics/v1/labels with `options.defaultColor` (defaults to 'blue').
-   * - If no match is found and `options.createMissing` is false, passes the value through as a raw label ID.
+   * - `id:<value>` entries bypass lookup.
+   * - Unmatched entries are created when `createMissing` is set, otherwise passed through as raw IDs.
+   * - A 403 from the labels API skips that entry so annotation creation can still proceed.
    */
   async resolveLabels(inputs, options) {
     const cleaned = Array.from(
@@ -3624,7 +3643,7 @@ var DoitClient = class _DoitClient {
         continue;
       }
       try {
-        const searchResult = await this.listLabels({ nameContains: entry, maxResults: 50 });
+        const searchResult = await this.listLabels({ nameContains: entry, maxResults: LABEL_SEARCH_PAGE_SIZE });
         const labels = searchResult.labels ?? [];
         const exactMatch = labels.find(
           (lbl) => lbl.name.toLowerCase() === entry.toLowerCase() || lbl.id === entry
@@ -3721,22 +3740,9 @@ function writeStepSummary(markdown, env = process.env) {
   return true;
 }
 
-// src/types.ts
-var DOIT_LABEL_COLORS = [
-  "blue",
-  "skyBlue",
-  "teal",
-  "mint",
-  "lime",
-  "softYellow",
-  "apricot",
-  "lavender",
-  "purple",
-  "rosePink",
-  "slateGrey"
-];
-
 // src/index.ts
+var MIN_MAX_RESULTS = 1;
+var MAX_MAX_RESULTS = 500;
 var VALID_OPERATIONS = [
   "create",
   "update",
@@ -3793,7 +3799,7 @@ function parseActionInputs(env = process.env) {
   const labels = parseCsvList(readRawInput("labels", env));
   const createMissingLabels = parseBoolean(readRawInput("create-missing-labels", env), false);
   const tenantId = readRawInput("tenant-id", env) || (env.DOIT_TENANT_ID ? env.DOIT_TENANT_ID.trim() : void 0);
-  const apiUrl = readRawInput("api-url", env) || (env.DOIT_API_URL ? env.DOIT_API_URL.trim() : "") || "https://api.doit.com";
+  const apiUrl = readRawInput("api-url", env) || (env.DOIT_API_URL ? env.DOIT_API_URL.trim() : "") || DEFAULT_API_URL;
   const dryRun = parseBoolean(readRawInput("dry-run", env), false);
   const failOnError = parseBoolean(readRawInput("fail-on-error", env), true);
   const filter = readRawInput("filter", env) || void 0;
@@ -3801,9 +3807,9 @@ function parseActionInputs(env = process.env) {
   let maxResults;
   if (rawMaxResults) {
     const parsedMax = Number.parseInt(rawMaxResults, 10);
-    if (!Number.isInteger(parsedMax) || parsedMax < 1 || parsedMax > 500) {
+    if (!Number.isInteger(parsedMax) || parsedMax < MIN_MAX_RESULTS || parsedMax > MAX_MAX_RESULTS) {
       throw new Error(
-        `Invalid max-results "${rawMaxResults}". Expected an integer between 1 and 500.`
+        `Invalid max-results "${rawMaxResults}". Expected an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}.`
       );
     }
     maxResults = parsedMax;
