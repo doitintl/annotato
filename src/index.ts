@@ -14,6 +14,7 @@ import {
   CreateAnnotationRequest,
   DEFAULT_API_URL,
   DOIT_LABEL_COLORS,
+  GitHubEventContext,
   LabelColor,
   UpdateAnnotationRequest,
 } from './types.js';
@@ -127,17 +128,207 @@ export interface ExecuteActionOptions {
   now?: Date;
 }
 
-export async function executeAction(
-  inputs: ActionInputs,
-  options?: ExecuteActionOptions
-): Promise<ActionResult> {
-  const env = options?.env ?? process.env;
+interface OperationArgs {
+  client: DoitClient;
+  inputs: ActionInputs;
+  context: GitHubEventContext;
+  renderedContent: string;
+}
+
+function maskSecrets(inputs: ActionInputs): void {
   if (inputs.doitApiKey) {
     core.setSecret(inputs.doitApiKey);
   }
   if (inputs.tenantId) {
     core.setSecret(inputs.tenantId);
   }
+}
+
+function recordSummary(
+  result: ActionResult,
+  inputs: ActionInputs,
+  env: NodeJS.ProcessEnv
+): ActionResult {
+  writeStepSummary(buildStepSummaryMarkdown(result, inputs), env);
+  return result;
+}
+
+function requireAnnotationId(inputs: ActionInputs): string {
+  if (!inputs.annotationId) {
+    throw new Error(`Input "annotation-id" is required when operation is "${inputs.operation}".`);
+  }
+  return inputs.annotationId;
+}
+
+function shouldUpdateContent(inputs: ActionInputs): boolean {
+  return Boolean(inputs.content || inputs.template || inputs.releaseId);
+}
+
+function buildCreatePayload(
+  inputs: ActionInputs,
+  context: GitHubEventContext,
+  content: string,
+  labels: string[]
+): CreateAnnotationRequest {
+  return {
+    content,
+    timestamp: context.timestamp,
+    ...(inputs.reports.length > 0 ? { reports: inputs.reports } : {}),
+    ...(labels.length > 0 ? { labels } : {}),
+  };
+}
+
+function buildUpdatePayload(
+  inputs: ActionInputs,
+  context: GitHubEventContext,
+  content: string,
+  labels: string[]
+): UpdateAnnotationRequest {
+  return {
+    ...(shouldUpdateContent(inputs) ? { content } : {}),
+    ...(inputs.timestamp ? { timestamp: context.timestamp } : {}),
+    ...(inputs.reports.length > 0 ? { reports: inputs.reports } : {}),
+    ...(labels.length > 0 ? { labels } : {}),
+  };
+}
+
+function buildSkippedResult(
+  inputs: ActionInputs,
+  context: GitHubEventContext,
+  skipReason: string | undefined
+): ActionResult {
+  return {
+    operation: inputs.operation,
+    dryRun: inputs.dryRun,
+    skipped: true,
+    skipReason,
+    context,
+  };
+}
+
+function buildDryRunResult(
+  inputs: ActionInputs,
+  context: GitHubEventContext,
+  content: string
+): ActionResult {
+  const requestPayload =
+    inputs.operation === 'update'
+      ? buildUpdatePayload(inputs, context, content, inputs.labels)
+      : buildCreatePayload(inputs, context, content, inputs.labels);
+  return {
+    operation: inputs.operation,
+    dryRun: true,
+    annotationId: inputs.annotationId || 'dry-run-annotation-id',
+    annotationContent: content,
+    annotationTimestamp: context.timestamp,
+    resolvedLabels: inputs.labels,
+    requestPayload,
+    context,
+  };
+}
+
+function resolveInputLabels({ client, inputs }: OperationArgs): Promise<string[]> {
+  return client.resolveLabels(inputs.labels, {
+    createMissing: inputs.createMissingLabels,
+    defaultColor: inputs.labelColor,
+  });
+}
+
+async function handleCreate(args: OperationArgs): Promise<ActionResult> {
+  const { client, inputs, context, renderedContent } = args;
+  const resolvedLabels = inputs.labels.length > 0 ? await resolveInputLabels(args) : [];
+  const requestPayload = buildCreatePayload(inputs, context, renderedContent, resolvedLabels);
+  const created = await client.createAnnotation(requestPayload);
+  return {
+    operation: 'create',
+    dryRun: false,
+    annotationId: created.id,
+    annotationContent: created.content,
+    annotationTimestamp: created.timestamp,
+    annotation: created,
+    resolvedLabels,
+    requestPayload,
+    context,
+  };
+}
+
+async function handleUpdate(args: OperationArgs): Promise<ActionResult> {
+  const { client, inputs, context, renderedContent } = args;
+  const annotationId = requireAnnotationId(inputs);
+  const resolvedLabels = inputs.labels.length > 0 ? await resolveInputLabels(args) : undefined;
+  const requestPayload = buildUpdatePayload(inputs, context, renderedContent, resolvedLabels ?? []);
+  const updated = await client.updateAnnotation(annotationId, requestPayload);
+  return {
+    operation: 'update',
+    dryRun: false,
+    annotationId: updated.id,
+    annotationContent: updated.content,
+    annotationTimestamp: updated.timestamp,
+    annotation: updated,
+    resolvedLabels,
+    requestPayload,
+    context,
+  };
+}
+
+async function handleDelete({ client, inputs, context }: OperationArgs): Promise<ActionResult> {
+  const annotationId = requireAnnotationId(inputs);
+  await client.deleteAnnotation(annotationId);
+  return { operation: 'delete', dryRun: false, annotationId, context };
+}
+
+async function handleGet({ client, inputs, context }: OperationArgs): Promise<ActionResult> {
+  const fetched = await client.getAnnotation(requireAnnotationId(inputs));
+  return {
+    operation: 'get',
+    dryRun: false,
+    annotationId: fetched.id,
+    annotationContent: fetched.content,
+    annotationTimestamp: fetched.timestamp,
+    annotation: fetched,
+    context,
+  };
+}
+
+async function handleList({ client, inputs, context }: OperationArgs): Promise<ActionResult> {
+  const listed = await client.listAnnotations({
+    filter: inputs.filter,
+    maxResults: inputs.maxResults,
+  });
+  const annotations = listed.annotations ?? [];
+  const first = annotations[0];
+  return {
+    operation: 'list',
+    dryRun: false,
+    annotationId: first?.id,
+    annotationContent: first?.content,
+    annotationTimestamp: first?.timestamp,
+    annotations,
+    context,
+  };
+}
+
+function runOperation(args: OperationArgs): Promise<ActionResult> {
+  switch (args.inputs.operation) {
+    case 'create':
+      return handleCreate(args);
+    case 'update':
+      return handleUpdate(args);
+    case 'delete':
+      return handleDelete(args);
+    case 'get':
+      return handleGet(args);
+    case 'list':
+      return handleList(args);
+  }
+}
+
+export async function executeAction(
+  inputs: ActionInputs,
+  options?: ExecuteActionOptions
+): Promise<ActionResult> {
+  const env = options?.env ?? process.env;
+  maskSecrets(inputs);
 
   const context = extractGitHubContext({
     env,
@@ -150,16 +341,7 @@ export async function executeAction(
   if (inputs.operation === 'create') {
     const filterResult = evaluateAnnotationFilters(context, inputs);
     if (!filterResult.shouldAnnotate) {
-      const skippedResult: ActionResult = {
-        operation: inputs.operation,
-        dryRun: inputs.dryRun,
-        skipped: true,
-        skipReason: filterResult.skipReason,
-        context,
-      };
-      const markdown = buildStepSummaryMarkdown(skippedResult, inputs);
-      writeStepSummary(markdown, env);
-      return skippedResult;
+      return recordSummary(buildSkippedResult(inputs, context, filterResult.skipReason), inputs, env);
     }
   }
 
@@ -169,37 +351,7 @@ export async function executeAction(
   });
 
   if (inputs.dryRun) {
-    const requestPayload: CreateAnnotationRequest | UpdateAnnotationRequest =
-      inputs.operation === 'update'
-        ? {
-            ...(inputs.content || inputs.template || inputs.releaseId
-              ? { content: renderedContent }
-              : {}),
-            ...(inputs.timestamp ? { timestamp: context.timestamp } : {}),
-            ...(inputs.reports.length > 0 ? { reports: inputs.reports } : {}),
-            ...(inputs.labels.length > 0 ? { labels: inputs.labels } : {}),
-          }
-        : {
-            content: renderedContent,
-            timestamp: context.timestamp,
-            ...(inputs.reports.length > 0 ? { reports: inputs.reports } : {}),
-            ...(inputs.labels.length > 0 ? { labels: inputs.labels } : {}),
-          };
-
-    const dryRunResult: ActionResult = {
-      operation: inputs.operation,
-      dryRun: true,
-      annotationId: inputs.annotationId || 'dry-run-annotation-id',
-      annotationContent: renderedContent,
-      annotationTimestamp: context.timestamp,
-      resolvedLabels: inputs.labels,
-      requestPayload,
-      context,
-    };
-
-    const markdown = buildStepSummaryMarkdown(dryRunResult, inputs);
-    writeStepSummary(markdown, env);
-    return dryRunResult;
+    return recordSummary(buildDryRunResult(inputs, context, renderedContent), inputs, env);
   }
 
   if (!inputs.doitApiKey) {
@@ -216,125 +368,40 @@ export async function executeAction(
     onWarning: (msg: string) => core.warning(msg),
   });
 
-  let result: ActionResult;
+  const result = await runOperation({ client, inputs, context, renderedContent });
+  return recordSummary(result, inputs, env);
+}
 
-  if (inputs.operation === 'create') {
-    const resolvedLabels =
-      inputs.labels.length > 0
-        ? await client.resolveLabels(inputs.labels, {
-            createMissing: inputs.createMissingLabels,
-            defaultColor: inputs.labelColor,
-          })
-        : [];
+function buildAnnotationJson(result: ActionResult): string {
+  return JSON.stringify(
+    result.annotation ??
+      result.annotations ??
+      result.requestPayload ?? {
+        id: result.annotationId,
+        skipped: Boolean(result.skipped),
+        skipReason: result.skipReason,
+      }
+  );
+}
 
-    const requestPayload: CreateAnnotationRequest = {
-      content: renderedContent,
-      timestamp: context.timestamp,
-      ...(inputs.reports.length > 0 ? { reports: inputs.reports } : {}),
-      ...(resolvedLabels.length > 0 ? { labels: resolvedLabels } : {}),
-    };
+function publishOutputs(result: ActionResult): void {
+  core.setOutput('annotation-id', result.annotationId ?? '');
+  core.setOutput('annotation-content', result.annotationContent ?? '');
+  core.setOutput('annotation-timestamp', result.annotationTimestamp ?? '');
+  core.setOutput('annotation-skipped', result.skipped ? 'true' : 'false');
+  core.setOutput('annotation-json', buildAnnotationJson(result));
+}
 
-    const created = await client.createAnnotation(requestPayload);
-    result = {
-      operation: 'create',
-      dryRun: false,
-      annotationId: created.id,
-      annotationContent: created.content,
-      annotationTimestamp: created.timestamp,
-      annotation: created,
-      resolvedLabels,
-      requestPayload,
-      context,
-    };
-  } else if (inputs.operation === 'update') {
-    if (!inputs.annotationId) {
-      throw new Error('Input "annotation-id" is required when operation is "update".');
-    }
-
-    const resolvedLabels =
-      inputs.labels.length > 0
-        ? await client.resolveLabels(inputs.labels, {
-            createMissing: inputs.createMissingLabels,
-            defaultColor: inputs.labelColor,
-          })
-        : undefined;
-
-    const shouldUpdateContent = Boolean(
-      inputs.content || inputs.template || inputs.releaseId
-    );
-    const updatePayload: UpdateAnnotationRequest = {};
-    if (shouldUpdateContent) {
-      updatePayload.content = renderedContent;
-    }
-    if (inputs.timestamp) {
-      updatePayload.timestamp = context.timestamp;
-    }
-    if (inputs.reports.length > 0) {
-      updatePayload.reports = inputs.reports;
-    }
-    if (resolvedLabels && resolvedLabels.length > 0) {
-      updatePayload.labels = resolvedLabels;
-    }
-
-    const updated = await client.updateAnnotation(inputs.annotationId, updatePayload);
-    result = {
-      operation: 'update',
-      dryRun: false,
-      annotationId: updated.id,
-      annotationContent: updated.content,
-      annotationTimestamp: updated.timestamp,
-      annotation: updated,
-      resolvedLabels,
-      requestPayload: updatePayload,
-      context,
-    };
-  } else if (inputs.operation === 'delete') {
-    if (!inputs.annotationId) {
-      throw new Error('Input "annotation-id" is required when operation is "delete".');
-    }
-    await client.deleteAnnotation(inputs.annotationId);
-    result = {
-      operation: 'delete',
-      dryRun: false,
-      annotationId: inputs.annotationId,
-      context,
-    };
-  } else if (inputs.operation === 'get') {
-    if (!inputs.annotationId) {
-      throw new Error('Input "annotation-id" is required when operation is "get".');
-    }
-    const fetched = await client.getAnnotation(inputs.annotationId);
-    result = {
-      operation: 'get',
-      dryRun: false,
-      annotationId: fetched.id,
-      annotationContent: fetched.content,
-      annotationTimestamp: fetched.timestamp,
-      annotation: fetched,
-      context,
-    };
-  } else {
-    const listed = await client.listAnnotations({
-      filter: inputs.filter,
-      maxResults: inputs.maxResults,
-    });
-    const annotations = listed.annotations ?? [];
-    const first = annotations[0];
-    result = {
-      operation: 'list',
-      dryRun: false,
-      annotationId: first?.id,
-      annotationContent: first?.content,
-      annotationTimestamp: first?.timestamp,
-      annotations,
-      context,
-    };
+function logCompletion(result: ActionResult): void {
+  if (result.skipped) {
+    core.info(`[Annotato] Skipped annotation: ${result.skipReason}`);
+    return;
   }
-
-  const markdown = buildStepSummaryMarkdown(result, inputs);
-  writeStepSummary(markdown, env);
-
-  return result;
+  const dryRunMarker = result.dryRun ? '(DRY RUN) ' : '';
+  const idSuffix = result.annotationId ? ` (id: ${result.annotationId})` : '';
+  core.info(
+    `[Annotato] ${dryRunMarker}Operation "${result.operation}" completed${idSuffix}.`
+  );
 }
 
 export async function run(options?: ExecuteActionOptions): Promise<ActionResult | undefined> {
@@ -345,33 +412,8 @@ export async function run(options?: ExecuteActionOptions): Promise<ActionResult 
     failOnError = inputs.failOnError;
 
     const result = await executeAction(inputs, options);
-
-    core.setOutput('annotation-id', result.annotationId ?? '');
-    core.setOutput('annotation-content', result.annotationContent ?? '');
-    core.setOutput('annotation-timestamp', result.annotationTimestamp ?? '');
-    core.setOutput('annotation-skipped', result.skipped ? 'true' : 'false');
-    core.setOutput(
-      'annotation-json',
-      JSON.stringify(
-        result.annotation ??
-          result.annotations ??
-          result.requestPayload ?? {
-            id: result.annotationId,
-            skipped: Boolean(result.skipped),
-            skipReason: result.skipReason,
-          }
-      )
-    );
-
-    if (result.skipped) {
-      core.info(`[Annotato] Skipped annotation: ${result.skipReason}`);
-    } else {
-      core.info(
-        `[Annotato] ${result.dryRun ? '(DRY RUN) ' : ''}Operation "${result.operation}" completed${
-          result.annotationId ? ` (id: ${result.annotationId})` : ''
-        }.`
-      );
-    }
+    publishOutputs(result);
+    logCompletion(result);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
