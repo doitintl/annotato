@@ -3077,98 +3077,144 @@ function normalizeTimestamp(rawTimestamp, fallbackNow = /* @__PURE__ */ new Date
   }
   return new Date(parsedMs).toISOString();
 }
+function resolveReleaseEvent(input) {
+  const { payload, options, refName, shortSha, defaultRunUrl, defaultEnvironment } = input;
+  const releaseObj = asRecord(payload.release);
+  const tag = asString(releaseObj.tag_name) || refName || shortSha || "release";
+  const releaseName = asString(releaseObj.name);
+  return {
+    tag,
+    release: asString(options?.releaseIdOverride) || releaseName || tag,
+    environment: defaultEnvironment,
+    url: asString(releaseObj.html_url) || defaultRunUrl,
+    detectedTimestamp: asString(releaseObj.published_at) || asString(releaseObj.created_at),
+    releaseName: releaseName || void 0,
+    releaseBody: asString(releaseObj.body) || void 0
+  };
+}
+function resolveDeploymentEvent(input) {
+  const { payload, options, refName, shortSha, defaultRunUrl, defaultEnvironment } = input;
+  const deployment = asRecord(payload.deployment);
+  const deploymentStatus = asRecord(payload.deployment_status);
+  const tag = stripRefPrefix(asString(deployment.ref)) || refName || shortSha || "deploy";
+  return {
+    tag,
+    release: asString(options?.releaseIdOverride) || tag,
+    environment: asString(options?.environmentOverride) || asString(deploymentStatus.environment) || asString(deployment.environment) || defaultEnvironment,
+    url: asString(deploymentStatus.target_url) || asString(deploymentStatus.environment_url) || defaultRunUrl,
+    detectedTimestamp: asString(deploymentStatus.updated_at) || asString(deploymentStatus.created_at) || asString(deployment.created_at)
+  };
+}
+function resolvePushEvent(input) {
+  const { payload, options, refName, shortSha, defaultRunUrl, defaultEnvironment } = input;
+  const headCommit = asRecord(payload.head_commit);
+  const tag = stripRefPrefix(asString(payload.ref)) || refName || shortSha || "push";
+  return {
+    tag,
+    release: asString(options?.releaseIdOverride) || tag,
+    environment: defaultEnvironment,
+    url: asString(headCommit.url) || asString(payload.compare) || defaultRunUrl,
+    detectedTimestamp: asString(headCommit.timestamp)
+  };
+}
+function resolveManualEvent(input) {
+  const { payload, options, refName, shortSha, defaultRunUrl, defaultEnvironment } = input;
+  const inputsObj = asRecord(payload.inputs);
+  const inputRelease = asString(inputsObj.release) || asString(inputsObj.version) || asString(inputsObj.tag);
+  const tag = inputRelease || refName || shortSha || "manual";
+  const inputEnvironment = asString(inputsObj.environment);
+  const useInputEnvironment = inputEnvironment && !asString(options?.environmentOverride);
+  return {
+    tag,
+    release: asString(options?.releaseIdOverride) || tag,
+    environment: useInputEnvironment ? inputEnvironment : defaultEnvironment,
+    url: defaultRunUrl,
+    detectedTimestamp: ""
+  };
+}
+function resolveEventFields(eventName, input) {
+  switch (eventName) {
+    case "release":
+      return resolveReleaseEvent(input);
+    case "deployment_status":
+    case "deployment":
+      return resolveDeploymentEvent(input);
+    case "push":
+      return resolvePushEvent(input);
+    default:
+      return resolveManualEvent(input);
+  }
+}
+function resolveSha(env, payload) {
+  return asString(env.GITHUB_SHA) || asString(asRecord(payload.head_commit).id) || asString(asRecord(payload.pull_request).merge_commit_sha) || asString(asRecord(payload.deployment).sha) || "";
+}
+function resolveRefName(env, payload) {
+  return asString(env.GITHUB_REF_NAME) || stripRefPrefix(asString(env.GITHUB_REF)) || stripRefPrefix(asString(payload.ref));
+}
+function isTagRef(env, payload, eventName) {
+  return asString(env.GITHUB_REF_TYPE) === "tag" || asString(env.GITHUB_REF).startsWith("refs/tags/") || asString(payload.ref).startsWith("refs/tags/") || eventName === "release";
+}
+function resolveCommitMessage(env, payload) {
+  const prObj = asRecord(payload.pull_request);
+  const releaseObj = asRecord(payload.release);
+  return [
+    asString(asRecord(payload.head_commit).message),
+    asString(prObj.title),
+    asString(prObj.body),
+    asString(releaseObj.name),
+    asString(releaseObj.body),
+    asString(env.GITHUB_COMMIT_MESSAGE)
+  ].filter(Boolean).join("\n").trim();
+}
+function resolvePrLabels(env, payload) {
+  const payloadLabels = asRecord(payload.pull_request).labels;
+  const fromPayload = Array.isArray(payloadLabels) ? payloadLabels.map((item) => typeof item === "string" ? item.trim() : asString(asRecord(item).name)).filter(Boolean) : [];
+  const fromEnv = parseCsvList(asString(env.GITHUB_PR_LABELS));
+  return Array.from(/* @__PURE__ */ new Set([...fromPayload, ...fromEnv]));
+}
+function resolveTimestamp(options, detectedTimestamp, now) {
+  if (options?.timestampOverride?.trim()) {
+    return normalizeTimestamp(options.timestampOverride, now);
+  }
+  if (detectedTimestamp) {
+    return normalizeTimestamp(detectedTimestamp, now);
+  }
+  return now.toISOString();
+}
 function extractGitHubContext(options) {
   const env = options?.env ?? process.env;
   const payload = options?.payload ?? readEventPayloadFromEnv(env);
   const now = options?.now ?? /* @__PURE__ */ new Date();
   const eventName = asString(env.GITHUB_EVENT_NAME) || "workflow_dispatch";
   const serverUrl = trimTrailingSlashes(asString(env.GITHUB_SERVER_URL) || "https://github.com");
-  const repoObj = asRecord(payload.repository);
-  const repo = asString(env.GITHUB_REPOSITORY) || asString(repoObj.full_name) || "unknown/repository";
-  const headCommit = asRecord(payload.head_commit);
-  const deployment = asRecord(payload.deployment);
-  const deploymentStatus = asRecord(payload.deployment_status);
-  const releaseObj = asRecord(payload.release);
-  const prObj = asRecord(payload.pull_request);
-  const inputsObj = asRecord(payload.inputs);
-  const sha = asString(env.GITHUB_SHA) || asString(headCommit.id) || asString(prObj.merge_commit_sha) || asString(deployment.sha) || "";
-  const shortSha = sha ? sha.slice(0, 7) : "";
-  const rawGithubRef = asString(env.GITHUB_REF);
-  const rawPayloadRef = asString(payload.ref);
-  const isTagRef = asString(env.GITHUB_REF_TYPE) === "tag" || rawGithubRef.startsWith("refs/tags/") || rawPayloadRef.startsWith("refs/tags/") || eventName === "release";
-  const refName = asString(env.GITHUB_REF_NAME) || stripRefPrefix(rawGithubRef) || stripRefPrefix(rawPayloadRef);
-  const messageParts = [
-    asString(headCommit.message),
-    asString(prObj.title),
-    asString(prObj.body),
-    asString(releaseObj.name),
-    asString(releaseObj.body),
-    asString(env.GITHUB_COMMIT_MESSAGE)
-  ].filter(Boolean);
-  const commitMessage = messageParts.join("\n").trim();
-  const rawPrLabels = Array.isArray(prObj.labels) ? prObj.labels.map(
-    (item) => typeof item === "string" ? item.trim() : asString(asRecord(item).name)
-  ).filter(Boolean) : [];
-  const envPrLabels = parseCsvList(asString(env.GITHUB_PR_LABELS));
-  const prLabels = Array.from(/* @__PURE__ */ new Set([...rawPrLabels, ...envPrLabels]));
-  const senderObj = asRecord(payload.sender);
-  const actor = asString(env.GITHUB_ACTOR) || asString(senderObj.login) || "github-actions";
+  const repo = asString(env.GITHUB_REPOSITORY) || asString(asRecord(payload.repository).full_name) || "unknown/repository";
+  const sha = resolveSha(env, payload);
+  const shortSha = sha.slice(0, 7);
   const runId = asString(env.GITHUB_RUN_ID);
-  const defaultRunUrl = runId ? `${serverUrl}/${repo}/actions/runs/${runId}` : `${serverUrl}/${repo}`;
-  let tag = refName || shortSha || "latest";
-  let release = "";
-  let environment = asString(options?.environmentOverride) || asString(env.ENVIRONMENT) || "production";
-  let url = defaultRunUrl;
-  let detectedTimestamp = "";
-  let releaseName;
-  let releaseBody;
-  if (eventName === "release") {
-    const tagName = asString(releaseObj.tag_name) || refName || shortSha || "release";
-    const relName = asString(releaseObj.name);
-    tag = tagName;
-    release = asString(options?.releaseIdOverride) || relName || tagName;
-    releaseName = relName || void 0;
-    releaseBody = asString(releaseObj.body) || void 0;
-    detectedTimestamp = asString(releaseObj.published_at) || asString(releaseObj.created_at);
-    url = asString(releaseObj.html_url) || defaultRunUrl;
-  } else if (eventName === "deployment_status" || eventName === "deployment") {
-    const deployRef = stripRefPrefix(asString(deployment.ref)) || refName || shortSha || "deploy";
-    tag = deployRef;
-    release = asString(options?.releaseIdOverride) || deployRef;
-    environment = asString(options?.environmentOverride) || asString(deploymentStatus.environment) || asString(deployment.environment) || environment;
-    detectedTimestamp = asString(deploymentStatus.updated_at) || asString(deploymentStatus.created_at) || asString(deployment.created_at);
-    url = asString(deploymentStatus.target_url) || asString(deploymentStatus.environment_url) || defaultRunUrl;
-  } else if (eventName === "push") {
-    const pushRef = stripRefPrefix(asString(payload.ref)) || refName || shortSha || "push";
-    tag = pushRef;
-    release = asString(options?.releaseIdOverride) || pushRef;
-    detectedTimestamp = asString(headCommit.timestamp);
-    url = asString(headCommit.url) || asString(payload.compare) || defaultRunUrl;
-  } else {
-    const inputRelease = asString(inputsObj.release) || asString(inputsObj.version) || asString(inputsObj.tag);
-    tag = inputRelease || refName || shortSha || "manual";
-    release = asString(options?.releaseIdOverride) || tag;
-    if (asString(inputsObj.environment) && !asString(options?.environmentOverride)) {
-      environment = asString(inputsObj.environment);
-    }
-  }
-  const timestamp = options?.timestampOverride?.trim() ? normalizeTimestamp(options.timestampOverride, now) : detectedTimestamp ? normalizeTimestamp(detectedTimestamp, now) : now.toISOString();
+  const event = resolveEventFields(eventName, {
+    payload,
+    options,
+    refName: resolveRefName(env, payload),
+    shortSha,
+    defaultRunUrl: runId ? `${serverUrl}/${repo}/actions/runs/${runId}` : `${serverUrl}/${repo}`,
+    defaultEnvironment: asString(options?.environmentOverride) || asString(env.ENVIRONMENT) || "production"
+  });
   return {
     eventName,
     repo,
-    release,
-    tag,
+    release: event.release,
+    tag: event.tag,
     sha,
     shortSha,
-    actor,
-    environment,
-    url,
-    timestamp,
-    releaseName,
-    releaseBody,
-    isTagRef,
-    commitMessage,
-    prLabels
+    actor: asString(env.GITHUB_ACTOR) || asString(asRecord(payload.sender).login) || "github-actions",
+    environment: event.environment,
+    url: event.url,
+    timestamp: resolveTimestamp(options, event.detectedTimestamp, now),
+    releaseName: event.releaseName,
+    releaseBody: event.releaseBody,
+    isTagRef: isTagRef(env, payload, eventName),
+    commitMessage: resolveCommitMessage(env, payload),
+    prLabels: resolvePrLabels(env, payload)
   };
 }
 function extractCleanCommitSubject(rawMessage) {
