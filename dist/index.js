@@ -3233,56 +3233,40 @@ function matchesGlobPattern(value, pattern) {
   const escaped = pattern.trim().replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".");
   return new RegExp(`^${escaped}$`, "i").test(value.trim());
 }
+var REQUIRE_TAG_ANY_TAG_VALUES = ["true", "1", "yes", "*"];
+var REQUIRE_TAG_DISABLED_VALUES = ["false", "0", "no"];
+function checkRequireTag(context, requireTag) {
+  const raw = requireTag?.trim();
+  if (!raw) return void 0;
+  const normalized = raw.toLowerCase();
+  if (REQUIRE_TAG_ANY_TAG_VALUES.includes(normalized)) {
+    return context.isTagRef ? void 0 : `Ref "${context.tag}" is not a Git tag or release (require-tag="${raw}").`;
+  }
+  if (REQUIRE_TAG_DISABLED_VALUES.includes(normalized)) return void 0;
+  const candidates = [context.tag, context.release].filter(Boolean);
+  const matched = parseCsvList(raw).some(
+    (pattern) => candidates.some((candidate) => matchesGlobPattern(candidate, pattern))
+  );
+  return matched ? void 0 : `Tag/release "${context.tag}" did not match require-tag pattern "${raw}".`;
+}
+function checkRequireCommitTag(context, markers) {
+  if (!markers || markers.length === 0) return void 0;
+  const messageLower = (context.commitMessage || "").toLowerCase();
+  const matched = markers.some((marker) => messageLower.includes(marker.toLowerCase()));
+  return matched ? void 0 : `Commit/PR message did not contain any required marker (${markers.join(", ")}).`;
+}
+function checkRequirePrLabel(context, requiredLabels) {
+  if (!requiredLabels || requiredLabels.length === 0) return void 0;
+  const existingLabels = context.prLabels ?? [];
+  const existingLower = existingLabels.map((label) => label.toLowerCase());
+  const matched = requiredLabels.some(
+    (required) => existingLower.includes(required.toLowerCase())
+  );
+  return matched ? void 0 : `Pull request labels [${existingLabels.join(", ")}] did not match any required PR label (${requiredLabels.join(", ")}).`;
+}
 function evaluateAnnotationFilters(context, inputs) {
-  const rawRequireTag = inputs.requireTag?.trim();
-  if (rawRequireTag) {
-    const normalized = rawRequireTag.toLowerCase();
-    if (["true", "1", "yes", "*"].includes(normalized)) {
-      if (!context.isTagRef) {
-        return {
-          shouldAnnotate: false,
-          skipReason: `Ref "${context.tag}" is not a Git tag or release (require-tag="${rawRequireTag}").`
-        };
-      }
-    } else if (!["false", "0", "no"].includes(normalized)) {
-      const patterns = parseCsvList(rawRequireTag);
-      const candidates = [context.tag, context.release].filter(Boolean);
-      const matched = patterns.some(
-        (pattern) => candidates.some((cand) => matchesGlobPattern(cand, pattern))
-      );
-      if (!matched) {
-        return {
-          shouldAnnotate: false,
-          skipReason: `Tag/release "${context.tag}" did not match require-tag pattern "${rawRequireTag}".`
-        };
-      }
-    }
-  }
-  if (inputs.requireCommitTag && inputs.requireCommitTag.length > 0) {
-    const messageLower = (context.commitMessage || "").toLowerCase();
-    const matchedTag = inputs.requireCommitTag.some(
-      (marker) => messageLower.includes(marker.toLowerCase())
-    );
-    if (!matchedTag) {
-      return {
-        shouldAnnotate: false,
-        skipReason: `Commit/PR message did not contain any required marker (${inputs.requireCommitTag.join(", ")}).`
-      };
-    }
-  }
-  if (inputs.requirePrLabel && inputs.requirePrLabel.length > 0) {
-    const existingLabels = (context.prLabels ?? []).map((l) => l.toLowerCase());
-    const matchedLabel = inputs.requirePrLabel.some(
-      (reqLabel) => existingLabels.includes(reqLabel.toLowerCase())
-    );
-    if (!matchedLabel) {
-      return {
-        shouldAnnotate: false,
-        skipReason: `Pull request labels [${(context.prLabels ?? []).join(", ")}] did not match any required PR label (${inputs.requirePrLabel.join(", ")}).`
-      };
-    }
-  }
-  return { shouldAnnotate: true };
+  const skipReason = checkRequireTag(context, inputs.requireTag) ?? checkRequireCommitTag(context, inputs.requireCommitTag) ?? checkRequirePrLabel(context, inputs.requirePrLabel);
+  return skipReason ? { shouldAnnotate: false, skipReason } : { shouldAnnotate: true };
 }
 
 // src/types.ts
