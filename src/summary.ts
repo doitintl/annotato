@@ -8,6 +8,11 @@ export function escapeMarkdownCell(value: string): string {
     .replace(/\r?\n/g, ' ');
 }
 
+/** Escapes table delimiters while preserving literal backslashes inside code spans. */
+export function escapeMarkdownCodeCell(value: string): string {
+  return value.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+}
+
 export function buildStepSummaryMarkdown(result: ActionResult, inputs: ActionInputs): string {
   const lines: string[] = [];
   const modeSuffix = result.dryRun ? ' (Dry Run)' : '';
@@ -38,21 +43,21 @@ export function buildStepSummaryMarkdown(result: ActionResult, inputs: ActionInp
 
   lines.push('| Field | Value |');
   lines.push('| :--- | :--- |');
-  lines.push(`| **Operation** | \`${escapeMarkdownCell(result.operation)}\` |`);
+  lines.push(`| **Operation** | \`${escapeMarkdownCodeCell(result.operation)}\` |`);
   lines.push(`| **Status** | ${escapeMarkdownCell(statusText)} |`);
   if (result.annotationId) {
-    lines.push(`| **Annotation ID** | \`${escapeMarkdownCell(result.annotationId)}\` |`);
+    lines.push(`| **Annotation ID** | \`${escapeMarkdownCodeCell(result.annotationId)}\` |`);
   }
   if (result.annotationTimestamp) {
-    lines.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCell(result.annotationTimestamp)}\` |`);
+    lines.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCodeCell(result.annotationTimestamp)}\` |`);
   }
   if (result.annotationContent) {
     lines.push(`| **Content** | ${escapeMarkdownCell(result.annotationContent)} |`);
   }
-  lines.push(`| **Repository** | \`${escapeMarkdownCell(result.context.repo)}\` |`);
-  lines.push(`| **Release / Ref** | \`${escapeMarkdownCell(result.context.release)}\` |`);
-  lines.push(`| **GitHub Event** | \`${escapeMarkdownCell(result.context.eventName)}\` |`);
-  lines.push(`| **Environment** | \`${escapeMarkdownCell(result.context.environment)}\` |`);
+  lines.push(`| **Repository** | \`${escapeMarkdownCodeCell(result.context.repo)}\` |`);
+  lines.push(`| **Release / Ref** | \`${escapeMarkdownCodeCell(result.context.release)}\` |`);
+  lines.push(`| **GitHub Event** | \`${escapeMarkdownCodeCell(result.context.eventName)}\` |`);
+  lines.push(`| **Environment** | \`${escapeMarkdownCodeCell(result.context.environment)}\` |`);
   lines.push(`| **Reports** | ${escapeMarkdownCell(reportsText)} |`);
   lines.push(`| **Labels** | ${escapeMarkdownCell(labelsText)} |`);
   lines.push('');
@@ -71,7 +76,7 @@ export function buildStepSummaryMarkdown(result: ActionResult, inputs: ActionInp
             ? item.labels.map((l) => `${l.name} (${l.id})`).join(', ')
             : '—';
         lines.push(
-          `| \`${escapeMarkdownCell(item.id)}\` | \`${escapeMarkdownCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(itemLabels)} |`
+          `| \`${escapeMarkdownCodeCell(item.id)}\` | \`${escapeMarkdownCodeCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(itemLabels)} |`
         );
       }
     }

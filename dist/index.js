@@ -3659,6 +3659,9 @@ var fs2 = __toESM(require("node:fs"));
 function escapeMarkdownCell(value) {
   return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
+function escapeMarkdownCodeCell(value) {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
 function buildStepSummaryMarkdown(result, inputs) {
   const lines = [];
   const modeSuffix = result.dryRun ? " (Dry Run)" : "";
@@ -3671,21 +3674,21 @@ function buildStepSummaryMarkdown(result, inputs) {
   const labelsText = labelsList.length > 0 ? labelsList.join(", ") : "None";
   lines.push("| Field | Value |");
   lines.push("| :--- | :--- |");
-  lines.push(`| **Operation** | \`${escapeMarkdownCell(result.operation)}\` |`);
+  lines.push(`| **Operation** | \`${escapeMarkdownCodeCell(result.operation)}\` |`);
   lines.push(`| **Status** | ${escapeMarkdownCell(statusText)} |`);
   if (result.annotationId) {
-    lines.push(`| **Annotation ID** | \`${escapeMarkdownCell(result.annotationId)}\` |`);
+    lines.push(`| **Annotation ID** | \`${escapeMarkdownCodeCell(result.annotationId)}\` |`);
   }
   if (result.annotationTimestamp) {
-    lines.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCell(result.annotationTimestamp)}\` |`);
+    lines.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCodeCell(result.annotationTimestamp)}\` |`);
   }
   if (result.annotationContent) {
     lines.push(`| **Content** | ${escapeMarkdownCell(result.annotationContent)} |`);
   }
-  lines.push(`| **Repository** | \`${escapeMarkdownCell(result.context.repo)}\` |`);
-  lines.push(`| **Release / Ref** | \`${escapeMarkdownCell(result.context.release)}\` |`);
-  lines.push(`| **GitHub Event** | \`${escapeMarkdownCell(result.context.eventName)}\` |`);
-  lines.push(`| **Environment** | \`${escapeMarkdownCell(result.context.environment)}\` |`);
+  lines.push(`| **Repository** | \`${escapeMarkdownCodeCell(result.context.repo)}\` |`);
+  lines.push(`| **Release / Ref** | \`${escapeMarkdownCodeCell(result.context.release)}\` |`);
+  lines.push(`| **GitHub Event** | \`${escapeMarkdownCodeCell(result.context.eventName)}\` |`);
+  lines.push(`| **Environment** | \`${escapeMarkdownCodeCell(result.context.environment)}\` |`);
   lines.push(`| **Reports** | ${escapeMarkdownCell(reportsText)} |`);
   lines.push(`| **Labels** | ${escapeMarkdownCell(labelsText)} |`);
   lines.push("");
@@ -3700,7 +3703,7 @@ function buildStepSummaryMarkdown(result, inputs) {
       for (const item of result.annotations) {
         const itemLabels = item.labels && item.labels.length > 0 ? item.labels.map((l) => `${l.name} (${l.id})`).join(", ") : "\u2014";
         lines.push(
-          `| \`${escapeMarkdownCell(item.id)}\` | \`${escapeMarkdownCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(itemLabels)} |`
+          `| \`${escapeMarkdownCodeCell(item.id)}\` | \`${escapeMarkdownCodeCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(itemLabels)} |`
         );
       }
     }
