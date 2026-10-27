@@ -21,6 +21,63 @@ const FALLBACK_CUSTOMER_CONTEXT = 'doit.com';
 const ATTEMPT_LOG_SNIPPET_LENGTH = 80;
 const DIAGNOSTICS_SNIPPET_LENGTH = 120;
 
+interface RequestOptions {
+  query?: Record<string, string | number | undefined>;
+  body?: unknown;
+}
+
+interface SingleRequestOptions extends RequestOptions {
+  includeTenantHeader?: boolean;
+  includeCustomerContextQuery?: boolean;
+}
+
+interface RawResponse {
+  response: Response;
+  rawText: string;
+}
+
+interface TenantRetryStrategy {
+  label: string;
+  includeTenantHeader: boolean;
+  includeCustomerContextQuery: boolean;
+}
+
+// Tried in order after a 401/403 when a tenant id is configured:
+// 1. legacy ?customerContext=<tenantId> (legacy Doer API keys that ignore/reject X-Tenant-Id)
+// 2. both X-Tenant-Id and ?customerContext=<tenantId>
+// 3. neither (single-customer tokens where a tenant override is rejected)
+const TENANT_RETRY_STRATEGIES: readonly TenantRetryStrategy[] = [
+  { label: 'customerContext', includeTenantHeader: false, includeCustomerContextQuery: true },
+  { label: 'both', includeTenantHeader: true, includeCustomerContextQuery: true },
+  { label: 'noTenantOverride', includeTenantHeader: false, includeCustomerContextQuery: false },
+];
+
+function isLoopbackHost(hostname: string): boolean {
+  return ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(hostname);
+}
+
+function isDoitHost(hostname: string): boolean {
+  return hostname === 'api.doit.com' || hostname.endsWith('.doit.com');
+}
+
+function describePermissions(permissions: unknown): string {
+  if (!Array.isArray(permissions)) return 'unknown';
+  return permissions.length > 0 ? permissions.join(', ') : 'none/doer-token';
+}
+
+function describeAttempt(label: string, { response, rawText }: RawResponse): string {
+  return `${label}->${response.status}(${rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`;
+}
+
+function parseErrorDetail(rawText: string): string {
+  try {
+    const parsed = JSON.parse(rawText) as DoitErrorResponse;
+    return parsed.error || parsed.message || rawText;
+  } catch {
+    return rawText;
+  }
+}
+
 export interface DoitClientOptions {
   apiKey: string;
   baseUrl?: string;
@@ -82,18 +139,13 @@ export class DoitClient {
       throw new Error('DoiT API base URL must not contain embedded credentials.');
     }
     const hostname = parsed.hostname.toLowerCase();
-    const isLoopback =
-      hostname === '127.0.0.1' ||
-      hostname === 'localhost' ||
-      hostname === '::1' ||
-      hostname === '[::1]';
+    const isLoopback = isLoopbackHost(hostname);
     if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
       throw new Error(
         `DoiT API base URL must use https:// (received "${parsed.protocol}//${parsed.hostname}").`
       );
     }
-    const isAllowedDoitHost = hostname === 'api.doit.com' || hostname.endsWith('.doit.com');
-    if (!isAllowedDoitHost && !isLoopback) {
+    if (!isDoitHost(hostname) && !isLoopback) {
       throw new Error(
         `DoiT API base URL host "${parsed.hostname}" is not in the allowlist (*.doit.com).`
       );
@@ -134,13 +186,8 @@ export class DoitClient {
   private async executeSingleRequest(
     method: string,
     path: string,
-    options?: {
-      query?: Record<string, string | number | undefined>;
-      body?: unknown;
-      includeTenantHeader?: boolean;
-      includeCustomerContextQuery?: boolean;
-    }
-  ): Promise<{ response: Response; rawText: string }> {
+    options?: SingleRequestOptions
+  ): Promise<RawResponse> {
     const url = new URL(`${this.baseUrl}${path}`);
     if (options?.query) {
       for (const [key, val] of Object.entries(options.query)) {
@@ -187,12 +234,7 @@ export class DoitClient {
         const parsed = JSON.parse(rawText) as {
           permissions?: string[];
         };
-        const perms = Array.isArray(parsed.permissions)
-          ? parsed.permissions.length > 0
-            ? parsed.permissions.join(', ')
-            : 'none/doer-token'
-          : 'unknown';
-        return ` [validate=200 permissions=${perms}]`;
+        return ` [validate=200 permissions=${describePermissions(parsed.permissions)}]`;
       }
       return ` [validate=${response.status}: ${rawText.slice(0, DIAGNOSTICS_SNIPPET_LENGTH)}]`;
     } catch (err) {
@@ -200,100 +242,70 @@ export class DoitClient {
     }
   }
 
-  private async request<T>(
+  private async retryWithTenantStrategies(
     method: string,
     path: string,
-    options?: {
-      query?: Record<string, string | number | undefined>;
-      body?: unknown;
+    options: RequestOptions | undefined,
+    firstAttempt: RawResponse,
+    attemptLogs: string[]
+  ): Promise<RawResponse> {
+    for (const strategy of TENANT_RETRY_STRATEGIES) {
+      const attempt = await this.executeSingleRequest(method, path, {
+        ...options,
+        includeTenantHeader: strategy.includeTenantHeader,
+        includeCustomerContextQuery: strategy.includeCustomerContextQuery,
+      });
+      attemptLogs.push(describeAttempt(strategy.label, attempt));
+      if (attempt.response.ok) {
+        return attempt;
+      }
     }
-  ): Promise<T> {
-    const attemptLogs: string[] = [];
+    return firstAttempt;
+  }
 
-    let { response, rawText } = await this.executeSingleRequest(method, path, {
-      query: options?.query,
-      body: options?.body,
+  private async buildApiError(
+    method: string,
+    path: string,
+    { response, rawText }: RawResponse,
+    attemptLogs: string[]
+  ): Promise<DoitApiError> {
+    const attemptsSummary = attemptLogs.length > 1 ? ` [attempts: ${attemptLogs.join('; ')}]` : '';
+    const diagnostics = path !== '/auth/v1/validate' ? await this.fetchTokenDiagnostics() : '';
+    // Ensure API key is never leaked in error details
+    const safeDetail = `${parseErrorDetail(rawText)}${attemptsSummary}${diagnostics}`
+      .split(this.apiKey)
+      .join('***');
+    return new DoitApiError(
+      `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
+      response.status,
+      response.statusText,
+      path,
+      safeDetail
+    );
+  }
+
+  private async request<T>(method: string, path: string, options?: RequestOptions): Promise<T> {
+    const firstAttempt = await this.executeSingleRequest(method, path, {
+      ...options,
       includeTenantHeader: true,
       includeCustomerContextQuery: false,
     });
-    attemptLogs.push(
-      `${this.tenantId ? 'X-Tenant-Id' : 'default'}->${response.status}(${rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
-    );
+    const attemptLogs = [
+      describeAttempt(this.tenantId ? 'X-Tenant-Id' : 'default', firstAttempt),
+    ];
 
-    // If 401/403 when tenantId is configured:
-    // 1. Retry with legacy ?customerContext=<tenantId> (for legacy Doer API keys that ignore/reject X-Tenant-Id)
-    // 2. Retry with both X-Tenant-Id and ?customerContext=<tenantId>
-    // 3. Retry without X-Tenant-Id or customerContext (for single-customer tokens where tenant override is rejected)
-    if ((response.status === 401 || response.status === 403) && this.tenantId) {
-      const strategies: Array<{
-        label: string;
-        includeTenantHeader: boolean;
-        includeCustomerContextQuery: boolean;
-      }> = [
-        {
-          label: 'customerContext',
-          includeTenantHeader: false,
-          includeCustomerContextQuery: true,
-        },
-        {
-          label: 'both',
-          includeTenantHeader: true,
-          includeCustomerContextQuery: true,
-        },
-        {
-          label: 'noTenantOverride',
-          includeTenantHeader: false,
-          includeCustomerContextQuery: false,
-        },
-      ];
-
-      for (const strat of strategies) {
-        const nextAttempt = await this.executeSingleRequest(method, path, {
-          query: options?.query,
-          body: options?.body,
-          includeTenantHeader: strat.includeTenantHeader,
-          includeCustomerContextQuery: strat.includeCustomerContextQuery,
-        });
-        attemptLogs.push(
-          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
-        );
-        if (nextAttempt.response.ok) {
-          response = nextAttempt.response;
-          rawText = nextAttempt.rawText;
-          break;
-        }
-      }
-    }
+    const isAuthFailure = firstAttempt.response.status === 401 || firstAttempt.response.status === 403;
+    const { response, rawText } =
+      isAuthFailure && this.tenantId
+        ? await this.retryWithTenantStrategies(method, path, options, firstAttempt, attemptLogs)
+        : firstAttempt;
 
     if (!response.ok) {
-      let errorDetail = rawText;
-      try {
-        const parsed = JSON.parse(rawText) as DoitErrorResponse;
-        errorDetail = parsed.error || parsed.message || rawText;
-      } catch {
-        // Keep raw text when not JSON
-      }
-      const attemptsSummary =
-        attemptLogs.length > 1 ? ` [attempts: ${attemptLogs.join('; ')}]` : '';
-      const diagnostics =
-        path !== '/auth/v1/validate' ? await this.fetchTokenDiagnostics() : '';
-      // Ensure API key is never leaked in error details
-      const safeDetail = `${errorDetail}${attemptsSummary}${diagnostics}`
-        .split(this.apiKey)
-        .join('***');
-      throw new DoitApiError(
-        `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
-        response.status,
-        response.statusText,
-        path,
-        safeDetail
-      );
+      throw await this.buildApiError(method, path, { response, rawText }, attemptLogs);
     }
-
     if (!rawText) {
       return undefined as T;
     }
-
     return JSON.parse(rawText) as T;
   }
 

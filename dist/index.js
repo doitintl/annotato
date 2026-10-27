@@ -3308,6 +3308,32 @@ var ANNOTATION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 var FALLBACK_CUSTOMER_CONTEXT = "doit.com";
 var ATTEMPT_LOG_SNIPPET_LENGTH = 80;
 var DIAGNOSTICS_SNIPPET_LENGTH = 120;
+var TENANT_RETRY_STRATEGIES = [
+  { label: "customerContext", includeTenantHeader: false, includeCustomerContextQuery: true },
+  { label: "both", includeTenantHeader: true, includeCustomerContextQuery: true },
+  { label: "noTenantOverride", includeTenantHeader: false, includeCustomerContextQuery: false }
+];
+function isLoopbackHost(hostname) {
+  return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(hostname);
+}
+function isDoitHost(hostname) {
+  return hostname === "api.doit.com" || hostname.endsWith(".doit.com");
+}
+function describePermissions(permissions) {
+  if (!Array.isArray(permissions)) return "unknown";
+  return permissions.length > 0 ? permissions.join(", ") : "none/doer-token";
+}
+function describeAttempt(label, { response, rawText }) {
+  return `${label}->${response.status}(${rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`;
+}
+function parseErrorDetail(rawText) {
+  try {
+    const parsed = JSON.parse(rawText);
+    return parsed.error || parsed.message || rawText;
+  } catch {
+    return rawText;
+  }
+}
 var DoitApiError = class extends Error {
   status;
   statusText;
@@ -3351,14 +3377,13 @@ var DoitClient = class _DoitClient {
       throw new Error("DoiT API base URL must not contain embedded credentials.");
     }
     const hostname = parsed.hostname.toLowerCase();
-    const isLoopback = hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1" || hostname === "[::1]";
+    const isLoopback = isLoopbackHost(hostname);
     if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback)) {
       throw new Error(
         `DoiT API base URL must use https:// (received "${parsed.protocol}//${parsed.hostname}").`
       );
     }
-    const isAllowedDoitHost = hostname === "api.doit.com" || hostname.endsWith(".doit.com");
-    if (!isAllowedDoitHost && !isLoopback) {
+    if (!isDoitHost(hostname) && !isLoopback) {
       throw new Error(
         `DoiT API base URL host "${parsed.hostname}" is not in the allowlist (*.doit.com).`
       );
@@ -3432,77 +3457,52 @@ var DoitClient = class _DoitClient {
       }
       if (response.ok && rawText) {
         const parsed = JSON.parse(rawText);
-        const perms = Array.isArray(parsed.permissions) ? parsed.permissions.length > 0 ? parsed.permissions.join(", ") : "none/doer-token" : "unknown";
-        return ` [validate=200 permissions=${perms}]`;
+        return ` [validate=200 permissions=${describePermissions(parsed.permissions)}]`;
       }
       return ` [validate=${response.status}: ${rawText.slice(0, DIAGNOSTICS_SNIPPET_LENGTH)}]`;
     } catch (err) {
       return ` [validate=error: ${err instanceof Error ? err.message : String(err)}]`;
     }
   }
+  async retryWithTenantStrategies(method, path, options, firstAttempt, attemptLogs) {
+    for (const strategy of TENANT_RETRY_STRATEGIES) {
+      const attempt = await this.executeSingleRequest(method, path, {
+        ...options,
+        includeTenantHeader: strategy.includeTenantHeader,
+        includeCustomerContextQuery: strategy.includeCustomerContextQuery
+      });
+      attemptLogs.push(describeAttempt(strategy.label, attempt));
+      if (attempt.response.ok) {
+        return attempt;
+      }
+    }
+    return firstAttempt;
+  }
+  async buildApiError(method, path, { response, rawText }, attemptLogs) {
+    const attemptsSummary = attemptLogs.length > 1 ? ` [attempts: ${attemptLogs.join("; ")}]` : "";
+    const diagnostics = path !== "/auth/v1/validate" ? await this.fetchTokenDiagnostics() : "";
+    const safeDetail = `${parseErrorDetail(rawText)}${attemptsSummary}${diagnostics}`.split(this.apiKey).join("***");
+    return new DoitApiError(
+      `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
+      response.status,
+      response.statusText,
+      path,
+      safeDetail
+    );
+  }
   async request(method, path, options) {
-    const attemptLogs = [];
-    let { response, rawText } = await this.executeSingleRequest(method, path, {
-      query: options?.query,
-      body: options?.body,
+    const firstAttempt = await this.executeSingleRequest(method, path, {
+      ...options,
       includeTenantHeader: true,
       includeCustomerContextQuery: false
     });
-    attemptLogs.push(
-      `${this.tenantId ? "X-Tenant-Id" : "default"}->${response.status}(${rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
-    );
-    if ((response.status === 401 || response.status === 403) && this.tenantId) {
-      const strategies = [
-        {
-          label: "customerContext",
-          includeTenantHeader: false,
-          includeCustomerContextQuery: true
-        },
-        {
-          label: "both",
-          includeTenantHeader: true,
-          includeCustomerContextQuery: true
-        },
-        {
-          label: "noTenantOverride",
-          includeTenantHeader: false,
-          includeCustomerContextQuery: false
-        }
-      ];
-      for (const strat of strategies) {
-        const nextAttempt = await this.executeSingleRequest(method, path, {
-          query: options?.query,
-          body: options?.body,
-          includeTenantHeader: strat.includeTenantHeader,
-          includeCustomerContextQuery: strat.includeCustomerContextQuery
-        });
-        attemptLogs.push(
-          `${strat.label}->${nextAttempt.response.status}(${nextAttempt.rawText.slice(0, ATTEMPT_LOG_SNIPPET_LENGTH)})`
-        );
-        if (nextAttempt.response.ok) {
-          response = nextAttempt.response;
-          rawText = nextAttempt.rawText;
-          break;
-        }
-      }
-    }
+    const attemptLogs = [
+      describeAttempt(this.tenantId ? "X-Tenant-Id" : "default", firstAttempt)
+    ];
+    const isAuthFailure = firstAttempt.response.status === 401 || firstAttempt.response.status === 403;
+    const { response, rawText } = isAuthFailure && this.tenantId ? await this.retryWithTenantStrategies(method, path, options, firstAttempt, attemptLogs) : firstAttempt;
     if (!response.ok) {
-      let errorDetail = rawText;
-      try {
-        const parsed = JSON.parse(rawText);
-        errorDetail = parsed.error || parsed.message || rawText;
-      } catch {
-      }
-      const attemptsSummary = attemptLogs.length > 1 ? ` [attempts: ${attemptLogs.join("; ")}]` : "";
-      const diagnostics = path !== "/auth/v1/validate" ? await this.fetchTokenDiagnostics() : "";
-      const safeDetail = `${errorDetail}${attemptsSummary}${diagnostics}`.split(this.apiKey).join("***");
-      throw new DoitApiError(
-        `DoiT API ${method} ${path} failed (${response.status} ${response.statusText}): ${safeDetail}`,
-        response.status,
-        response.statusText,
-        path,
-        safeDetail
-      );
+      throw await this.buildApiError(method, path, { response, rawText }, attemptLogs);
     }
     if (!rawText) {
       return void 0;
