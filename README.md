@@ -109,7 +109,7 @@ jobs:
     steps:
       - name: Record Release on DoiT Cloud Analytics Timeline
         id: doit_annotation
-        uses: ericethridge/annotato@main
+        uses: doitintl/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           reports: ${{ vars.DOIT_REPORT_IDS }}
@@ -160,7 +160,7 @@ jobs:
 
       - name: Annotate Deployment in DoiT Cloud Intelligence
         id: annotate
-        uses: ericethridge/annotato@main
+        uses: doitintl/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           release-id: 'prod-${{ github.sha }}'
@@ -180,7 +180,7 @@ If your organization merges dozens or hundreds of commits to `main` each day, an
 #### Option A: Only Annotate Commits Containing a Marker (`[annotate]` or `[release]`)
 ```yaml
       - name: Annotate Marked Production Merges in DoiT
-        uses: ericethridge/annotato@main
+        uses: doitintl/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           # Only creates a DoiT annotation when the commit message or PR title/body contains [annotate] or [release]
@@ -192,7 +192,7 @@ If your organization merges dozens or hundreds of commits to `main` each day, an
 #### Option B: Only Annotate Git Version Tags (`v*`)
 ```yaml
       - name: Annotate Version Tags Only
-        uses: ericethridge/annotato@main
+        uses: doitintl/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           # Only creates a DoiT annotation when the tag/release matches v* or prod-*
@@ -213,7 +213,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Annotate Labeled PR Merge in DoiT
-        uses: ericethridge/annotato@main
+        uses: doitintl/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           require-pr-label: 'annotate, finops-impact'
@@ -228,7 +228,7 @@ If a deployment fails verification or is rolled back, you can update the annotat
 ```yaml
       - name: Update DoiT Annotation After Rollback
         if: failure() && steps.annotate.outputs.annotation-id != ''
-        uses: ericethridge/annotato@main
+        uses: doitintl/annotato@main
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           operation: 'update'
@@ -247,7 +247,7 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 
 ```yaml
       - name: Preview DoiT Annotation Payload (Dry Run)
-        uses: ericethridge/annotato@main
+        uses: doitintl/annotato@main
         with:
           doit-api-key: 'dry-run-placeholder'
           dry-run: 'true'
