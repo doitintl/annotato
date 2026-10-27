@@ -3029,6 +3029,15 @@ var core = __toESM(require_core());
 
 // src/context.ts
 var fs = __toESM(require("node:fs"));
+
+// src/utils.ts
+function trimTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
+// src/context.ts
 function readEventPayloadFromEnv(env) {
   const eventPath = env.GITHUB_EVENT_PATH?.trim();
   if (!eventPath) {
@@ -3072,7 +3081,7 @@ function extractGitHubContext(options) {
   const payload = options?.payload ?? readEventPayloadFromEnv(env);
   const now = options?.now ?? /* @__PURE__ */ new Date();
   const eventName = asString(env.GITHUB_EVENT_NAME) || "workflow_dispatch";
-  const serverUrl = (asString(env.GITHUB_SERVER_URL) || "https://github.com").replace(/\/+$/, "");
+  const serverUrl = trimTrailingSlashes(asString(env.GITHUB_SERVER_URL) || "https://github.com");
   const repoObj = asRecord(payload.repository);
   const repo = asString(env.GITHUB_REPOSITORY) || asString(repoObj.full_name) || "unknown/repository";
   const headCommit = asRecord(payload.head_commit);
@@ -3308,7 +3317,7 @@ var DoitClient = class _DoitClient {
     this.onWarning = options.onWarning;
   }
   static normalizeBaseUrl(rawBaseUrl) {
-    const candidate = (rawBaseUrl?.trim() || "https://api.doit.com").replace(/\/+$/, "");
+    const candidate = trimTrailingSlashes(rawBaseUrl?.trim() || "https://api.doit.com");
     let parsed;
     try {
       parsed = new URL(candidate);
@@ -3648,7 +3657,7 @@ var DoitClient = class _DoitClient {
 // src/summary.ts
 var fs2 = __toESM(require("node:fs"));
 function escapeMarkdownCell(value) {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 function buildStepSummaryMarkdown(result, inputs) {
   const lines = [];

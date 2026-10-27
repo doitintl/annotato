@@ -1,5 +1,6 @@
 import * as fs from 'node:fs';
 import { ActionInputs, GitHubEventContext } from './types.js';
+import { trimTrailingSlashes } from './utils.js';
 
 export interface ExtractContextOptions {
   env?: NodeJS.ProcessEnv;
@@ -62,7 +63,7 @@ export function extractGitHubContext(options?: ExtractContextOptions): GitHubEve
   const now = options?.now ?? new Date();
 
   const eventName = asString(env.GITHUB_EVENT_NAME) || 'workflow_dispatch';
-  const serverUrl = (asString(env.GITHUB_SERVER_URL) || 'https://github.com').replace(/\/+$/, '');
+  const serverUrl = trimTrailingSlashes(asString(env.GITHUB_SERVER_URL) || 'https://github.com');
   const repoObj = asRecord(payload.repository);
   const repo =
     asString(env.GITHUB_REPOSITORY) || asString(repoObj.full_name) || 'unknown/repository';

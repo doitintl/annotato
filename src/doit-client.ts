@@ -11,6 +11,7 @@ import {
   ListLabelsParams,
   UpdateAnnotationRequest,
 } from './types.js';
+import { trimTrailingSlashes } from './utils.js';
 
 export interface DoitClientOptions {
   apiKey: string;
@@ -62,7 +63,7 @@ export class DoitClient {
   }
 
   private static normalizeBaseUrl(rawBaseUrl?: string): string {
-    const candidate = (rawBaseUrl?.trim() || 'https://api.doit.com').replace(/\/+$/, '');
+    const candidate = trimTrailingSlashes(rawBaseUrl?.trim() || 'https://api.doit.com');
     let parsed: URL;
     try {
       parsed = new URL(candidate);

@@ -1,8 +1,11 @@
 import * as fs from 'node:fs';
 import { ActionInputs, ActionResult } from './types.js';
 
-function escapeMarkdownCell(value: string): string {
-  return value.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+export function escapeMarkdownCell(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ');
 }
 
 export function buildStepSummaryMarkdown(result: ActionResult, inputs: ActionInputs): string {
