@@ -442,7 +442,7 @@ export class DoitClient {
    * Resolves label names or IDs into label IDs.
    *
    * - `id:<value>` entries bypass lookup.
-   * - Unmatched entries are created when `createMissing` is set, otherwise passed through as raw IDs.
+   * - Unmatched entries are created when `createMissing` is set (using `defaultColor`, which defaults to `'blue'`), otherwise passed through as raw IDs.
    * - A 403 from the labels API skips that entry so annotation creation can still proceed.
    */
   public async resolveLabels(
