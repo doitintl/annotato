@@ -3029,6 +3029,15 @@ var core = __toESM(require_core());
 
 // src/context.ts
 var fs = __toESM(require("node:fs"));
+
+// src/utils.ts
+function trimTrailingSlashes(value) {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) end--;
+  return value.slice(0, end);
+}
+
+// src/context.ts
 function readEventPayloadFromEnv(env) {
   const eventPath = env.GITHUB_EVENT_PATH?.trim();
   if (!eventPath) {
@@ -3072,7 +3081,7 @@ function extractGitHubContext(options) {
   const payload = options?.payload ?? readEventPayloadFromEnv(env);
   const now = options?.now ?? /* @__PURE__ */ new Date();
   const eventName = asString(env.GITHUB_EVENT_NAME) || "workflow_dispatch";
-  const serverUrl = (asString(env.GITHUB_SERVER_URL) || "https://github.com").replace(/\/+$/, "");
+  const serverUrl = trimTrailingSlashes(asString(env.GITHUB_SERVER_URL) || "https://github.com");
   const repoObj = asRecord(payload.repository);
   const repo = asString(env.GITHUB_REPOSITORY) || asString(repoObj.full_name) || "unknown/repository";
   const headCommit = asRecord(payload.head_commit);
@@ -3308,7 +3317,7 @@ var DoitClient = class _DoitClient {
     this.onWarning = options.onWarning;
   }
   static normalizeBaseUrl(rawBaseUrl) {
-    const candidate = (rawBaseUrl?.trim() || "https://api.doit.com").replace(/\/+$/, "");
+    const candidate = trimTrailingSlashes(rawBaseUrl?.trim() || "https://api.doit.com");
     let parsed;
     try {
       parsed = new URL(candidate);
@@ -3648,6 +3657,9 @@ var DoitClient = class _DoitClient {
 // src/summary.ts
 var fs2 = __toESM(require("node:fs"));
 function escapeMarkdownCell(value) {
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+function escapeMarkdownCodeCell(value) {
   return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 function buildStepSummaryMarkdown(result, inputs) {
@@ -3662,21 +3674,21 @@ function buildStepSummaryMarkdown(result, inputs) {
   const labelsText = labelsList.length > 0 ? labelsList.join(", ") : "None";
   lines.push("| Field | Value |");
   lines.push("| :--- | :--- |");
-  lines.push(`| **Operation** | \`${escapeMarkdownCell(result.operation)}\` |`);
+  lines.push(`| **Operation** | \`${escapeMarkdownCodeCell(result.operation)}\` |`);
   lines.push(`| **Status** | ${escapeMarkdownCell(statusText)} |`);
   if (result.annotationId) {
-    lines.push(`| **Annotation ID** | \`${escapeMarkdownCell(result.annotationId)}\` |`);
+    lines.push(`| **Annotation ID** | \`${escapeMarkdownCodeCell(result.annotationId)}\` |`);
   }
   if (result.annotationTimestamp) {
-    lines.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCell(result.annotationTimestamp)}\` |`);
+    lines.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCodeCell(result.annotationTimestamp)}\` |`);
   }
   if (result.annotationContent) {
     lines.push(`| **Content** | ${escapeMarkdownCell(result.annotationContent)} |`);
   }
-  lines.push(`| **Repository** | \`${escapeMarkdownCell(result.context.repo)}\` |`);
-  lines.push(`| **Release / Ref** | \`${escapeMarkdownCell(result.context.release)}\` |`);
-  lines.push(`| **GitHub Event** | \`${escapeMarkdownCell(result.context.eventName)}\` |`);
-  lines.push(`| **Environment** | \`${escapeMarkdownCell(result.context.environment)}\` |`);
+  lines.push(`| **Repository** | \`${escapeMarkdownCodeCell(result.context.repo)}\` |`);
+  lines.push(`| **Release / Ref** | \`${escapeMarkdownCodeCell(result.context.release)}\` |`);
+  lines.push(`| **GitHub Event** | \`${escapeMarkdownCodeCell(result.context.eventName)}\` |`);
+  lines.push(`| **Environment** | \`${escapeMarkdownCodeCell(result.context.environment)}\` |`);
   lines.push(`| **Reports** | ${escapeMarkdownCell(reportsText)} |`);
   lines.push(`| **Labels** | ${escapeMarkdownCell(labelsText)} |`);
   lines.push("");
@@ -3691,7 +3703,7 @@ function buildStepSummaryMarkdown(result, inputs) {
       for (const item of result.annotations) {
         const itemLabels = item.labels && item.labels.length > 0 ? item.labels.map((l) => `${l.name} (${l.id})`).join(", ") : "\u2014";
         lines.push(
-          `| \`${escapeMarkdownCell(item.id)}\` | \`${escapeMarkdownCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(itemLabels)} |`
+          `| \`${escapeMarkdownCodeCell(item.id)}\` | \`${escapeMarkdownCodeCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(itemLabels)} |`
         );
       }
     }
