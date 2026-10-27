@@ -3662,52 +3662,77 @@ function escapeMarkdownCell(value) {
 function escapeMarkdownCodeCell(value) {
   return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
-function buildStepSummaryMarkdown(result, inputs) {
-  const lines = [];
-  const modeSuffix = result.dryRun ? " (Dry Run)" : "";
-  lines.push(`## \u{1F4CC} DoiT Cloud Intelligence Annotation${modeSuffix}`);
-  lines.push("");
-  const statusText = result.skipped ? `\u23ED\uFE0F Skipped (${result.skipReason || "filtered"})` : result.dryRun ? "\u{1F9EA} Dry Run (no API mutation)" : "\u2705 Success";
+var DEFAULT_REPORTS_TEXT = "All eligible reports (default)";
+var GLOBAL_FALLBACK_REPORTS_TEXT = "All eligible reports (global fallback)";
+function describeStatus(result) {
+  if (result.skipped) return `\u23ED\uFE0F Skipped (${result.skipReason || "filtered"})`;
+  if (result.dryRun) return "\u{1F9EA} Dry Run (no API mutation)";
+  return "\u2705 Success";
+}
+function describeReports(result, inputs) {
+  const requestedReports = inputs.reports.length > 0 ? inputs.reports.join(", ") : void 0;
   const actualReports = result.annotation?.reports;
-  const reportsText = actualReports !== void 0 ? actualReports.length > 0 ? actualReports.join(", ") : inputs.reports.length > 0 ? "All eligible reports (global fallback)" : "All eligible reports (default)" : inputs.reports.length > 0 ? inputs.reports.join(", ") : "All eligible reports (default)";
-  const labelsList = result.resolvedLabels && result.resolvedLabels.length > 0 ? result.resolvedLabels : inputs.labels;
-  const labelsText = labelsList.length > 0 ? labelsList.join(", ") : "None";
-  lines.push("| Field | Value |");
-  lines.push("| :--- | :--- |");
-  lines.push(`| **Operation** | \`${escapeMarkdownCodeCell(result.operation)}\` |`);
-  lines.push(`| **Status** | ${escapeMarkdownCell(statusText)} |`);
+  if (actualReports === void 0) return requestedReports ?? DEFAULT_REPORTS_TEXT;
+  if (actualReports.length > 0) return actualReports.join(", ");
+  return requestedReports ? GLOBAL_FALLBACK_REPORTS_TEXT : DEFAULT_REPORTS_TEXT;
+}
+function describeLabels(result, inputs) {
+  const labels = result.resolvedLabels?.length ? result.resolvedLabels : inputs.labels;
+  return labels.length > 0 ? labels.join(", ") : "None";
+}
+function buildOperationTable(result, inputs) {
+  const rows = [
+    "| Field | Value |",
+    "| :--- | :--- |",
+    `| **Operation** | \`${escapeMarkdownCodeCell(result.operation)}\` |`,
+    `| **Status** | ${escapeMarkdownCell(describeStatus(result))} |`
+  ];
   if (result.annotationId) {
-    lines.push(`| **Annotation ID** | \`${escapeMarkdownCodeCell(result.annotationId)}\` |`);
+    rows.push(`| **Annotation ID** | \`${escapeMarkdownCodeCell(result.annotationId)}\` |`);
   }
   if (result.annotationTimestamp) {
-    lines.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCodeCell(result.annotationTimestamp)}\` |`);
+    rows.push(`| **Timestamp (UTC)** | \`${escapeMarkdownCodeCell(result.annotationTimestamp)}\` |`);
   }
   if (result.annotationContent) {
-    lines.push(`| **Content** | ${escapeMarkdownCell(result.annotationContent)} |`);
+    rows.push(`| **Content** | ${escapeMarkdownCell(result.annotationContent)} |`);
   }
-  lines.push(`| **Repository** | \`${escapeMarkdownCodeCell(result.context.repo)}\` |`);
-  lines.push(`| **Release / Ref** | \`${escapeMarkdownCodeCell(result.context.release)}\` |`);
-  lines.push(`| **GitHub Event** | \`${escapeMarkdownCodeCell(result.context.eventName)}\` |`);
-  lines.push(`| **Environment** | \`${escapeMarkdownCodeCell(result.context.environment)}\` |`);
-  lines.push(`| **Reports** | ${escapeMarkdownCell(reportsText)} |`);
-  lines.push(`| **Labels** | ${escapeMarkdownCell(labelsText)} |`);
-  lines.push("");
+  rows.push(
+    `| **Repository** | \`${escapeMarkdownCodeCell(result.context.repo)}\` |`,
+    `| **Release / Ref** | \`${escapeMarkdownCodeCell(result.context.release)}\` |`,
+    `| **GitHub Event** | \`${escapeMarkdownCodeCell(result.context.eventName)}\` |`,
+    `| **Environment** | \`${escapeMarkdownCodeCell(result.context.environment)}\` |`,
+    `| **Reports** | ${escapeMarkdownCell(describeReports(result, inputs))} |`,
+    `| **Labels** | ${escapeMarkdownCell(describeLabels(result, inputs))} |`
+  );
+  return rows;
+}
+function describeItemLabels(item) {
+  return item.labels && item.labels.length > 0 ? item.labels.map((l) => `${l.name} (${l.id})`).join(", ") : "\u2014";
+}
+function buildListedAnnotationsSection(annotations) {
+  const lines = [`### Listed Annotations (${annotations.length})`, ""];
+  if (annotations.length === 0) {
+    lines.push("_No annotations matched the query._");
+    return lines;
+  }
+  lines.push("| ID | Timestamp | Content | Labels |", "| :--- | :--- | :--- | :--- |");
+  for (const item of annotations) {
+    lines.push(
+      `| \`${escapeMarkdownCodeCell(item.id)}\` | \`${escapeMarkdownCodeCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(describeItemLabels(item))} |`
+    );
+  }
+  return lines;
+}
+function buildStepSummaryMarkdown(result, inputs) {
+  const modeSuffix = result.dryRun ? " (Dry Run)" : "";
+  const lines = [
+    `## \u{1F4CC} DoiT Cloud Intelligence Annotation${modeSuffix}`,
+    "",
+    ...buildOperationTable(result, inputs),
+    ""
+  ];
   if (result.operation === "list" && result.annotations) {
-    lines.push(`### Listed Annotations (${result.annotations.length})`);
-    lines.push("");
-    if (result.annotations.length === 0) {
-      lines.push("_No annotations matched the query._");
-    } else {
-      lines.push("| ID | Timestamp | Content | Labels |");
-      lines.push("| :--- | :--- | :--- | :--- |");
-      for (const item of result.annotations) {
-        const itemLabels = item.labels && item.labels.length > 0 ? item.labels.map((l) => `${l.name} (${l.id})`).join(", ") : "\u2014";
-        lines.push(
-          `| \`${escapeMarkdownCodeCell(item.id)}\` | \`${escapeMarkdownCodeCell(item.timestamp)}\` | ${escapeMarkdownCell(item.content)} | ${escapeMarkdownCell(itemLabels)} |`
-        );
-      }
-    }
-    lines.push("");
+    lines.push(...buildListedAnnotationsSection(result.annotations), "");
   }
   return lines.join("\n");
 }
