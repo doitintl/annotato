@@ -78,6 +78,37 @@ function parseErrorDetail(rawText: string): string {
   }
 }
 
+function buildCreateBody(payload: CreateAnnotationRequest): CreateAnnotationRequest {
+  const content = payload.content?.trim();
+  if (!content) {
+    throw new Error('Annotation content is required.');
+  }
+  const timestamp = payload.timestamp?.trim();
+  if (!timestamp || Number.isNaN(Date.parse(timestamp))) {
+    throw new Error(`Invalid RFC3339 timestamp for annotation: "${payload.timestamp}"`);
+  }
+
+  const body: CreateAnnotationRequest = {
+    content,
+    timestamp: new Date(timestamp).toISOString(),
+  };
+  if (payload.reports && payload.reports.length > 0) {
+    body.reports = payload.reports;
+  }
+  if (payload.labels && payload.labels.length > 0) {
+    body.labels = payload.labels;
+  }
+  return body;
+}
+
+function isAttachmentRejection(err: unknown, body: CreateAnnotationRequest): err is DoitApiError {
+  return (
+    err instanceof DoitApiError &&
+    (err.status === 403 || err.status === 404) &&
+    Boolean(body.reports?.length || body.labels?.length)
+  );
+}
+
 export interface DoitClientOptions {
   apiKey: string;
   baseUrl?: string;
@@ -310,47 +341,21 @@ export class DoitClient {
   }
 
   public async createAnnotation(payload: CreateAnnotationRequest): Promise<AnnotationListItem> {
-    const content = payload.content?.trim();
-    if (!content) {
-      throw new Error('Annotation content is required.');
-    }
-    const timestamp = payload.timestamp?.trim();
-    if (!timestamp || Number.isNaN(Date.parse(timestamp))) {
-      throw new Error(`Invalid RFC3339 timestamp for annotation: "${payload.timestamp}"`);
-    }
-
-    const body: CreateAnnotationRequest = {
-      content,
-      timestamp: new Date(timestamp).toISOString(),
-    };
-    if (payload.reports && payload.reports.length > 0) {
-      body.reports = payload.reports;
-    }
-    if (payload.labels && payload.labels.length > 0) {
-      body.labels = payload.labels;
-    }
-
+    const body = buildCreateBody(payload);
     try {
       return await this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', { body });
     } catch (err) {
       // If attaching to specific reports/labels caused a 403/404 (e.g. private user report with a service account token),
       // retry creating the annotation globally without report/label restrictions
-      if (
-        err instanceof DoitApiError &&
-        (err.status === 403 || err.status === 404) &&
-        (body.reports?.length || body.labels?.length)
-      ) {
-        this.onWarning?.(
-          `[Annotato] Attaching annotation to specified reports/labels returned HTTP ${err.status}; retrying as a global annotation without report/label restrictions.`
-        );
-        return await this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', {
-          body: {
-            content: body.content,
-            timestamp: body.timestamp,
-          },
-        });
+      if (!isAttachmentRejection(err, body)) {
+        throw err;
       }
-      throw err;
+      this.onWarning?.(
+        `[Annotato] Attaching annotation to specified reports/labels returned HTTP ${err.status}; retrying as a global annotation without report/label restrictions.`
+      );
+      return await this.request<AnnotationListItem>('POST', '/analytics/v1/annotations', {
+        body: { content: body.content, timestamp: body.timestamp },
+      });
     }
   }
 
@@ -455,52 +460,54 @@ export class DoitClient {
     const cleaned = Array.from(
       new Set(inputs.map((item) => item.trim()).filter((item) => item.length > 0))
     );
-    if (cleaned.length === 0) {
-      return [];
-    }
 
     const resolvedIds: string[] = [];
-    const defaultColor: LabelColor = options?.defaultColor ?? 'blue';
-
     for (const entry of cleaned) {
-      if (entry.startsWith('id:')) {
-        const explicitId = entry.slice(3).trim();
-        if (explicitId) {
-          resolvedIds.push(explicitId);
-        }
-        continue;
-      }
-
-      try {
-        const searchResult = await this.listLabels({ nameContains: entry, maxResults: LABEL_SEARCH_PAGE_SIZE });
-        const labels = searchResult.labels ?? [];
-        const exactMatch = labels.find(
-          (lbl) => lbl.name.toLowerCase() === entry.toLowerCase() || lbl.id === entry
-        );
-
-        if (exactMatch) {
-          resolvedIds.push(exactMatch.id);
-        } else if (options?.createMissing) {
-          const created = await this.createLabel({
-            name: entry,
-            color: defaultColor,
-          });
-          resolvedIds.push(created.id);
-        } else {
-          resolvedIds.push(entry);
-        }
-      } catch (err) {
-        if (err instanceof DoitApiError && err.status === 403) {
-          // Token lacks Labels API permission; skip label lookup/creation so annotation creation can still proceed
-          this.onWarning?.(
-            `[Annotato] Skipping label resolution for "${entry}" because /analytics/v1/labels returned 403 Forbidden.`
-          );
-          continue;
-        }
-        throw err;
+      const resolvedId = await this.resolveLabelEntry(entry, options);
+      if (resolvedId) {
+        resolvedIds.push(resolvedId);
       }
     }
-
     return Array.from(new Set(resolvedIds));
+  }
+
+  /** Returns the label id for one entry, or undefined when the entry should be skipped. */
+  private async resolveLabelEntry(
+    entry: string,
+    options?: { createMissing?: boolean; defaultColor?: LabelColor }
+  ): Promise<string | undefined> {
+    if (entry.startsWith('id:')) {
+      return entry.slice(3).trim() || undefined;
+    }
+
+    try {
+      const searchResult = await this.listLabels({
+        nameContains: entry,
+        maxResults: LABEL_SEARCH_PAGE_SIZE,
+      });
+      const exactMatch = (searchResult.labels ?? []).find(
+        (lbl) => lbl.name.toLowerCase() === entry.toLowerCase() || lbl.id === entry
+      );
+      if (exactMatch) {
+        return exactMatch.id;
+      }
+      if (options?.createMissing) {
+        const created = await this.createLabel({
+          name: entry,
+          color: options.defaultColor ?? 'blue',
+        });
+        return created.id;
+      }
+      return entry;
+    } catch (err) {
+      if (err instanceof DoitApiError && err.status === 403) {
+        // Token lacks Labels API permission; skip label lookup/creation so annotation creation can still proceed
+        this.onWarning?.(
+          `[Annotato] Skipping label resolution for "${entry}" because /analytics/v1/labels returned 403 Forbidden.`
+        );
+        return undefined;
+      }
+      throw err;
+    }
   }
 }
