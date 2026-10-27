@@ -3774,70 +3774,59 @@ function parseBoolean(val, defaultValue) {
   if (["false", "0", "no", "n"].includes(normalized)) return false;
   return defaultValue;
 }
+function optionalInput(name, env) {
+  return readRawInput(name, env) || void 0;
+}
+function inputWithEnvFallback(name, envKey, env) {
+  return readRawInput(name, env) || env[envKey]?.trim() || void 0;
+}
+function parseOperation(raw) {
+  const operation = raw.toLowerCase();
+  if (!VALID_OPERATIONS.includes(operation)) {
+    throw new Error(
+      `Invalid operation "${operation}". Must be one of: ${VALID_OPERATIONS.join(", ")}`
+    );
+  }
+  return operation;
+}
+function parseLabelColor(raw) {
+  if (!DOIT_LABEL_COLORS.includes(raw)) {
+    throw new Error(`Invalid label-color "${raw}". Must be one of: ${DOIT_LABEL_COLORS.join(", ")}`);
+  }
+  return raw;
+}
+function parseMaxResults(raw) {
+  if (!raw) return void 0;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < MIN_MAX_RESULTS || parsed > MAX_MAX_RESULTS) {
+    throw new Error(
+      `Invalid max-results "${raw}". Expected an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}.`
+    );
+  }
+  return parsed;
+}
 function parseActionInputs(env = process.env) {
-  const doitApiKey = readRawInput("doit-api-key", env) || (env.DOIT_API_KEY ? env.DOIT_API_KEY.trim() : "");
-  const rawOperation = (readRawInput("operation", env) || "create").toLowerCase();
-  if (!VALID_OPERATIONS.includes(rawOperation)) {
-    throw new Error(
-      `Invalid operation "${rawOperation}". Must be one of: ${VALID_OPERATIONS.join(", ")}`
-    );
-  }
-  const operation = rawOperation;
-  const rawColor = readRawInput("label-color", env) || "blue";
-  if (!DOIT_LABEL_COLORS.includes(rawColor)) {
-    throw new Error(
-      `Invalid label-color "${rawColor}". Must be one of: ${DOIT_LABEL_COLORS.join(", ")}`
-    );
-  }
-  const labelColor = rawColor;
-  const annotationId = readRawInput("annotation-id", env) || void 0;
-  const releaseId = readRawInput("release-id", env) || void 0;
-  const content = readRawInput("content", env) || void 0;
-  const template = readRawInput("template", env) || void 0;
-  const timestamp = readRawInput("timestamp", env) || void 0;
-  const reports = parseCsvList(readRawInput("reports", env));
-  const labels = parseCsvList(readRawInput("labels", env));
-  const createMissingLabels = parseBoolean(readRawInput("create-missing-labels", env), false);
-  const tenantId = readRawInput("tenant-id", env) || (env.DOIT_TENANT_ID ? env.DOIT_TENANT_ID.trim() : void 0);
-  const apiUrl = readRawInput("api-url", env) || (env.DOIT_API_URL ? env.DOIT_API_URL.trim() : "") || DEFAULT_API_URL;
-  const dryRun = parseBoolean(readRawInput("dry-run", env), false);
-  const failOnError = parseBoolean(readRawInput("fail-on-error", env), true);
-  const filter = readRawInput("filter", env) || void 0;
-  const rawMaxResults = readRawInput("max-results", env);
-  let maxResults;
-  if (rawMaxResults) {
-    const parsedMax = Number.parseInt(rawMaxResults, 10);
-    if (!Number.isInteger(parsedMax) || parsedMax < MIN_MAX_RESULTS || parsedMax > MAX_MAX_RESULTS) {
-      throw new Error(
-        `Invalid max-results "${rawMaxResults}". Expected an integer between ${MIN_MAX_RESULTS} and ${MAX_MAX_RESULTS}.`
-      );
-    }
-    maxResults = parsedMax;
-  }
-  const requireTag = readRawInput("require-tag", env) || void 0;
-  const requireCommitTag = parseCsvList(readRawInput("require-commit-tag", env));
-  const requirePrLabel = parseCsvList(readRawInput("require-pr-label", env));
   return {
-    doitApiKey,
-    operation,
-    annotationId,
-    releaseId,
-    content,
-    template,
-    timestamp,
-    reports,
-    labels,
-    createMissingLabels,
-    labelColor,
-    tenantId,
-    apiUrl,
-    dryRun,
-    failOnError,
-    filter,
-    maxResults,
-    requireTag,
-    requireCommitTag,
-    requirePrLabel
+    doitApiKey: inputWithEnvFallback("doit-api-key", "DOIT_API_KEY", env) ?? "",
+    operation: parseOperation(readRawInput("operation", env) || "create"),
+    annotationId: optionalInput("annotation-id", env),
+    releaseId: optionalInput("release-id", env),
+    content: optionalInput("content", env),
+    template: optionalInput("template", env),
+    timestamp: optionalInput("timestamp", env),
+    reports: parseCsvList(readRawInput("reports", env)),
+    labels: parseCsvList(readRawInput("labels", env)),
+    createMissingLabels: parseBoolean(readRawInput("create-missing-labels", env), false),
+    labelColor: parseLabelColor(readRawInput("label-color", env) || "blue"),
+    tenantId: inputWithEnvFallback("tenant-id", "DOIT_TENANT_ID", env),
+    apiUrl: inputWithEnvFallback("api-url", "DOIT_API_URL", env) ?? DEFAULT_API_URL,
+    dryRun: parseBoolean(readRawInput("dry-run", env), false),
+    failOnError: parseBoolean(readRawInput("fail-on-error", env), true),
+    filter: optionalInput("filter", env),
+    maxResults: parseMaxResults(readRawInput("max-results", env)),
+    requireTag: optionalInput("require-tag", env),
+    requireCommitTag: parseCsvList(readRawInput("require-commit-tag", env)),
+    requirePrLabel: parseCsvList(readRawInput("require-pr-label", env))
   };
 }
 async function executeAction(inputs, options) {
