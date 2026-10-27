@@ -27,7 +27,7 @@ function describeReports(result: ActionResult, inputs: ActionInputs): string {
   const actualReports = result.annotation?.reports;
   if (actualReports === undefined) return requestedReports ?? DEFAULT_REPORTS_TEXT;
   if (actualReports.length > 0) return actualReports.join(', ');
-  return requestedReports ? GLOBAL_FALLBACK_REPORTS_TEXT : DEFAULT_REPORTS_TEXT;
+  return inputs.reports.length > 0 ? GLOBAL_FALLBACK_REPORTS_TEXT : DEFAULT_REPORTS_TEXT;
 }
 
 function describeLabels(result: ActionResult, inputs: ActionInputs): string {
