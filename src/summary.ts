@@ -10,7 +10,10 @@ export function escapeMarkdownCell(value: string): string {
 
 /** Escapes table delimiters while preserving literal backslashes inside code spans. */
 export function escapeMarkdownCodeCell(value: string): string {
-  return value.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/\|/g, '\\|')
+    .replace(/\r?\n/g, ' ');
 }
 
 const DEFAULT_REPORTS_TEXT = 'All eligible reports (default)';
