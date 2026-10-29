@@ -11203,7 +11203,7 @@ function escapeMarkdownCell(value) {
   return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
 }
 function escapeMarkdownCodeCell(value) {
-  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+  return value.replace(/\||\r?\n/g, (match) => match === "|" ? "\\|" : " ");
 }
 var DEFAULT_REPORTS_TEXT = "All eligible reports (default)";
 var GLOBAL_FALLBACK_REPORTS_TEXT = "All eligible reports (global fallback)";
