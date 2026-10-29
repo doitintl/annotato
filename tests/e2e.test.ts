@@ -328,6 +328,57 @@ describe('Annotato End-to-End (dist/index.js against mock DoiT API server)', () 
     expect(summaryText).toContain('v9.9.9-dry');
   });
 
+  it('compares YAML manifests through the built action and skips a repeated configuration', async () => {
+    const manifest = `apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: app
+          resources:
+            requests:
+              cpu: 250m
+---
+kind: Secret
+data:
+  password: DO_NOT_SEND_THIS
+`;
+    const before = makeTempFile('before.yaml', manifest);
+    const after = makeTempFile('after.yaml', manifest.replace('replicas: 2', 'replicas: 4'));
+    const summary = makeTempFile('manifest-summary.md');
+    const output = makeTempFile('manifest-output.txt');
+    const env = {
+      ...process.env,
+      'INPUT_DOIT-API-KEY': 'e2e_doit_api_key_123',
+      'INPUT_API-URL': baseUrl,
+      'INPUT_MANIFEST-BEFORE': before,
+      'INPUT_MANIFEST-AFTER': after,
+      'INPUT_MANIFEST-NAMESPACE': 'production',
+      GITHUB_REPOSITORY: 'org/payments', GITHUB_RUN_ID: '123',
+      GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: output,
+    };
+    const distPath = path.resolve(process.cwd(), 'dist/index.js');
+    await execFileAsync(process.execPath, [distPath], { env });
+    expect(recordedRequests).toHaveLength(1);
+    expect(recordedRequests[0].body).toMatchObject({
+      content: expect.stringContaining('Deployment production/payments: desired replicas: 2 → 4'),
+    });
+    expect(JSON.stringify(recordedRequests)).not.toContain('DO_NOT_SEND_THIS');
+    expect(fs.readFileSync(summary, 'utf8')).toContain('desired replicas: 2 → 4');
+    expect(fs.readFileSync(output, 'utf8')).toContain('annotation-content');
+
+    recordedRequests.length = 0;
+    await execFileAsync(process.execPath, [distPath], {
+      env: { ...env, 'INPUT_MANIFEST-BEFORE': after },
+    });
+    expect(recordedRequests).toHaveLength(0);
+    expect(fs.readFileSync(output, 'utf8')).toContain('No tracked Kubernetes manifest changes');
+  });
+
   it('validates action.yml, README.md, and workflow templates exist and are properly configured', () => {
     const root = process.cwd();
     const actionYml = fs.readFileSync(path.join(root, 'action.yml'), 'utf8');

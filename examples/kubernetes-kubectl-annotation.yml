@@ -1,0 +1,74 @@
+name: Deploy Kubernetes manifests and annotate capacity changes
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseline-ref:
+        description: 'Full commit SHA of the last successful production deployment (not simply HEAD~1)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: production-payments
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      ENVIRONMENT: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: current
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.baseline-ref }}
+          path: baseline
+      # Install compatible kubectl and jq versions if your runner needs them.
+      - name: Configure cluster access
+        env:
+          KUBECONFIG_CONTENT: ${{ secrets.KUBECONFIG_CONTENT }}
+        run: |
+          umask 077
+          printf '%s' "$KUBECONFIG_CONTENT" > "$RUNNER_TEMP/kubeconfig"
+          printf 'KUBECONFIG=%s\n' "$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
+      - name: Render manifests from the known baseline and current deployment
+        # Example assumes each revision has a production Kustomize overlay.
+        # Use exactly these rendered files for both deployment and comparison.
+        run: |
+          kubectl kustomize baseline/k8s/overlays/production > "$RUNNER_TEMP/before.yaml"
+          kubectl kustomize current/k8s/overlays/production > "$RUNNER_TEMP/after.yaml"
+
+      - name: Apply and verify rollout
+        run: |
+          kubectl apply --namespace production -f "$RUNNER_TEMP/after.yaml"
+          kubectl get --namespace production -f "$RUNNER_TEMP/after.yaml" -o json > "$RUNNER_TEMP/applied.json"
+          jq -r '(.items // [.])[] | select(.kind == "Deployment" or .kind == "StatefulSet") | [.kind, .metadata.namespace, .metadata.name] | @tsv' "$RUNNER_TEMP/applied.json" |
+            while IFS=$'\t' read -r kind namespace name; do
+              kubectl rollout status "$kind/$name" --namespace "$namespace" --timeout=10m
+            done
+
+      - name: Annotate configured capacity changes
+        uses: doitintl/annotato@v0.2.0
+        with:
+          doit-api-key: ${{ secrets.DOIT_API_KEY }}
+          manifest-before: ${{ runner.temp }}/before.yaml
+          manifest-after: ${{ runner.temp }}/after.yaml
+          manifest-namespace: production
+          reports: ${{ vars.DOIT_REPORT_IDS }}
+          labels: production, kubernetes
+          create-missing-labels: 'true'
+          fail-on-error: 'false'
+
+      # Keep your existing deployment record/artifact promotion here. Record the
+      # deployed SHA even if annotation submission warns; it is the next baseline.

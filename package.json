@@ -1,6 +1,6 @@
 {
   "name": "annotato",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "GitHub Action and CLI that records GitHub releases and deployments as timestamped annotations in DoiT Cloud Intelligence",
   "main": "dist/index.js",
   "scripts": {
@@ -21,7 +21,8 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@actions/core": "^1.11.1"
+    "@actions/core": "^1.11.1",
+    "yaml": "^2.9.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

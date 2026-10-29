@@ -1,0 +1,6 @@
+apiVersion: v2
+name: annotato-demo
+description: Small HTTP workload for testing Annotato manifest comparisons
+type: application
+version: 0.1.0
+appVersion: "1.0"
