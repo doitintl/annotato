@@ -272,7 +272,7 @@ After your workflow successfully deploys and verifies the rollout, add:
 
 ```yaml
 - name: Annotate Kubernetes capacity changes
-  uses: doitintl/annotato@feature/kubernetes-manifest-annotations
+  uses: doitintl/annotato@v0.2.0
   env:
     ENVIRONMENT: production
   with:
@@ -286,8 +286,7 @@ After your workflow successfully deploys and verifies the rollout, add:
     fail-on-error: 'false'
 ```
 
-Use a release containing manifest support when available; `v0.1.0` does not
-include it. The feature branch reference above is for trying this change.
+Manifest support is available from `v0.2.0`; earlier releases do not include it.
 Add `dry-run: 'true'` to preview the generated annotation without DoiT calls.
 
 Example annotation:

@@ -47,8 +47,7 @@ jobs:
           helm get manifest payments --namespace production > "$RUNNER_TEMP/after.yaml"
 
       - name: Annotate configured capacity changes
-        # Use a version containing manifest support once released.
-        uses: doitintl/annotato@feature/kubernetes-manifest-annotations
+        uses: doitintl/annotato@v0.2.0
         with:
           doit-api-key: ${{ secrets.DOIT_API_KEY }}
           manifest-before: ${{ runner.temp }}/before.yaml
