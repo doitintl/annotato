@@ -117,6 +117,9 @@ export interface ActionInputs {
   requireTag?: string;
   requireCommitTag: string[];
   requirePrLabel: string[];
+  manifestBefore?: string;
+  manifestAfter?: string;
+  manifestNamespace?: string;
 }
 
 export interface GitHubEventContext {

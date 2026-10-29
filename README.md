@@ -257,6 +257,95 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 
 ---
 
+## Annotate Kubernetes Capacity Changes (Helm or kubectl)
+
+To try this on a test cluster, use the [small Helm chart and matching Kubernetes
+manifests](examples/kubernetes-test/README.md), including baseline/scaled variants
+and dry-run instructions.
+
+Annotato can compare two Kubernetes manifest files and annotate changes to
+**desired replicas** and **CPU/memory requests per regular container** for
+`apps/v1` Deployments and StatefulSets. It accepts YAML, multi-document Helm
+output, JSON, and Kubernetes Lists. No cluster connection is made by Annotato.
+
+After your workflow successfully deploys and verifies the rollout, add:
+
+```yaml
+- name: Annotate Kubernetes capacity changes
+  uses: doitintl/annotato@feature/kubernetes-manifest-annotations
+  env:
+    ENVIRONMENT: production
+  with:
+    doit-api-key: ${{ secrets.DOIT_API_KEY }}
+    manifest-before: ${{ runner.temp }}/before.yaml
+    manifest-after: ${{ runner.temp }}/after.yaml
+    manifest-namespace: production
+    reports: ${{ vars.DOIT_REPORT_IDS }}
+    labels: production, kubernetes
+    create-missing-labels: 'true'
+    fail-on-error: 'false'
+```
+
+Use a release containing manifest support when available; `v0.1.0` does not
+include it. The feature branch reference above is for trying this change.
+Add `dry-run: 'true'` to preview the generated annotation without DoiT calls.
+
+Example annotation:
+
+```text
+[org/payments] Kubernetes configuration changes in production (a1b2c3d)
+Deployment production/payments: container app cpu request: 250m → 500m; desired replicas: 3 → 6
+Configured demand only; not measured spend or live capacity.
+Workflow: https://github.com/org/payments/actions/runs/123
+```
+
+### Preparing the baseline
+
+- **Helm:** export `helm get manifest` before upgrading an existing, successfully
+  deployed release. After `helm upgrade --wait` and rollout verification, export
+  its manifests again. See [the Helm example](examples/kubernetes-helm-annotation.yml).
+- **kubectl:** render the same manifest set from the last successfully deployed
+  revision and the new revision, then apply the new rendered file and verify all
+  relevant rollouts. See [the kubectl/Kustomize example](examples/kubernetes-kubectl-annotation.yml),
+  which accepts an explicit baseline commit. For plain YAML, supply complete
+  multi-document files directly instead of rendering Kustomize overlays.
+
+The previous Git commit is not necessarily the previous successful deployment.
+Keep the baseline in your existing deployment record or retained artifact and
+advance it after successful deployment, even if annotation submission warns.
+Serialize deployments to the same environment. For charts or Kustomize builds,
+retain the rendered output when exact reproduction depends on external inputs.
+For a first deployment, an explicitly empty before file reports workloads as added;
+a missing baseline file is an error, never silently treated as empty.
+
+### Comparison behavior and limits
+
+One annotation summarizes all changed workloads in the supplied files. Unchanged
+workloads and equivalent quantities (`1`/`1000m`, `1Gi`/`1024Mi`) do not create
+annotations. Unrelated changes such as images, Secrets, ConfigMaps and environment
+variables are excluded. Namespaces and container names are part of matching;
+container order is ignored. Missing namespace uses `manifest-namespace` (otherwise
+`default`), missing replicas uses one, and missing requests are shown as
+`unspecified`. Added and removed workloads are identified as manifest additions
+and removals. **Removing a workload from a file does not delete it from the cluster
+with `kubectl apply`; your deployment workflow owns deletion/pruning.**
+
+Only workload identity, tracked values and workflow context are sent to DoiT.
+Invalid/duplicate workloads and malformed YAML fail before any API call; parser
+errors omit source excerpts. Each file is limited to 5 MiB.
+
+Manifest inputs require `operation: create` and cannot be combined with `content`
+or `template`. Existing labels, reports, filters, dry-run and fail-on-error behavior
+still apply. No tracked changes returns `annotation-skipped: 'true'`. The default
+timestamp is the annotation step's current time; use `timestamp` to supply the
+actual deployment completion time when reporting later.
+
+These are **configured demand changes**, not calculated savings or live Pod/node
+capacity. Admission defaults, requests derived from limits, HPA-driven replicas,
+init containers, Pod-level resources and changes made outside the workflow are
+not compared. The action does not verify deployment success itself: run it after
+your rollout checks, using the normal success condition, not `if: always()`.
+
 ## Action Inputs Reference
 
 | Input | Required | Default | Env Fallback | Description |
@@ -268,6 +357,9 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 | `content` | No | Auto-formatted | `INPUT_CONTENT` | Explicit annotation text shown on DoiT reports. Supports [template placeholders](#template-placeholders--default-formatting). |
 | `template` | No | Event default | `INPUT_TEMPLATE` | Custom template string used when `content` is not set. Supports [template placeholders](#template-placeholders--default-formatting). |
 | `timestamp` | No | Event timestamp | `INPUT_TIMESTAMP` | Explicit ISO-8601 / RFC3339 date-time (e.g., `2026-10-21T14:05:00Z`). Defaults to `release.published_at`, `head_commit.timestamp`, `deployment_status.updated_at`, or current UTC time. |
+| `manifest-before` | Cond. | — | `INPUT_MANIFEST_BEFORE` | Path to the last successfully deployed YAML/JSON manifest; requires `manifest-after`. |
+| `manifest-after` | Cond. | — | `INPUT_MANIFEST_AFTER` | Path to the successfully applied YAML/JSON manifest. Compare replicas and CPU/memory requests with `operation: create`; default timestamp is current UTC time. |
+| `manifest-namespace` | No | `default` | `INPUT_MANIFEST_NAMESPACE` | Namespace fallback for workloads without `metadata.namespace`. |
 | `reports` | No | `""` | `INPUT_REPORTS` | Comma- or newline-separated list of DoiT Cloud Analytics report IDs to attach the annotation to. |
 | `labels` | No | `""` | `INPUT_LABELS` | Comma- or newline-separated list of DoiT label names or label IDs to associate with the annotation. |
 | `create-missing-labels` | No | `false` | `INPUT_CREATE_MISSING_LABELS` | When `true`, automatically creates any label names not yet found in DoiT via `POST /analytics/v1/labels`. |
@@ -290,7 +382,7 @@ Use `dry-run: 'true'` to validate your template formatting and view the generate
 | `annotation-id` | The unique DoiT ID (`id`) of the created, updated, retrieved, or deleted annotation (or first item on `list`). |
 | `annotation-content` | The final rendered `content` string sent to or returned by DoiT. |
 | `annotation-timestamp` | The normalized RFC3339 UTC `timestamp` string (e.g., `2026-10-21T16:20:00.000Z`). |
-| `annotation-skipped` | `'true'` if annotation creation was skipped by `require-tag`, `require-commit-tag`, or `require-pr-label`; `'false'` otherwise. |
+| `annotation-skipped` | `'true'` if creation was skipped by filters or because no tracked manifest fields changed; `'false'` otherwise. |
 | `annotation-json` | Full JSON string of the DoiT API response object (or request payload when `dry-run: true`). |
 
 ---

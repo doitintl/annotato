@@ -6,6 +6,7 @@ import {
   renderAnnotationContent,
 } from './context.js';
 import { DoitClient } from './doit-client.js';
+import { compareManifestFiles, renderManifestContent } from './manifests.js';
 import { buildStepSummaryMarkdown, writeStepSummary } from './summary.js';
 import {
   ActionInputs,
@@ -118,6 +119,9 @@ export function parseActionInputs(env: NodeJS.ProcessEnv = process.env): ActionI
     requireTag: optionalInput('require-tag', env),
     requireCommitTag: parseCsvList(readRawInput('require-commit-tag', env)),
     requirePrLabel: parseCsvList(readRawInput('require-pr-label', env)),
+    manifestBefore: optionalInput('manifest-before', env),
+    manifestAfter: optionalInput('manifest-after', env),
+    manifestNamespace: optionalInput('manifest-namespace', env),
   };
 }
 
@@ -329,13 +333,24 @@ export async function executeAction(
 ): Promise<ActionResult> {
   const env = options?.env ?? process.env;
   maskSecrets(inputs);
+  const manifestMode = Boolean(inputs.manifestBefore || inputs.manifestAfter);
+  if (manifestMode) {
+    if (!inputs.manifestBefore || !inputs.manifestAfter) {
+      throw new Error('Inputs "manifest-before" and "manifest-after" must be provided together.');
+    }
+    if (inputs.operation !== 'create' || inputs.content || inputs.template) {
+      throw new Error('Manifest comparison requires operation "create" without content or template.');
+    }
+  } else if (inputs.manifestNamespace) {
+    throw new Error('Input "manifest-namespace" requires manifest-before and manifest-after.');
+  }
 
   const context = extractGitHubContext({
     env,
     payload: options?.payload,
     now: options?.now,
     releaseIdOverride: inputs.releaseId,
-    timestampOverride: inputs.timestamp,
+    timestampOverride: inputs.timestamp ?? (manifestMode ? (options?.now ?? new Date()).toISOString() : undefined),
   });
 
   if (inputs.operation === 'create') {
@@ -345,10 +360,19 @@ export async function executeAction(
     }
   }
 
-  const renderedContent = renderAnnotationContent(context, {
-    content: inputs.content,
-    template: inputs.template,
-  });
+  let renderedContent: string;
+  if (inputs.manifestBefore && inputs.manifestAfter) {
+    const changes = compareManifestFiles(inputs.manifestBefore, inputs.manifestAfter, inputs.manifestNamespace);
+    if (changes.length === 0) {
+      return recordSummary(buildSkippedResult(inputs, context, 'No tracked Kubernetes manifest changes.'), inputs, env);
+    }
+    renderedContent = renderManifestContent(context, changes, env);
+  } else {
+    renderedContent = renderAnnotationContent(context, {
+      content: inputs.content,
+      template: inputs.template,
+    });
+  }
 
   if (inputs.dryRun) {
     return recordSummary(buildDryRunResult(inputs, context, renderedContent), inputs, env);

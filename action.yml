@@ -28,6 +28,15 @@ inputs:
   timestamp:
     description: 'Explicit ISO-8601 / RFC3339 date-time for the annotation (defaults to the GitHub event timestamp or current UTC time)'
     required: false
+  manifest-before:
+    description: 'Path to the last successfully deployed Kubernetes manifest (YAML/JSON); requires manifest-after and operation create'
+    required: false
+  manifest-after:
+    description: 'Path to the successfully applied Kubernetes manifest (YAML/JSON); compare replicas and CPU/memory requests, skipping unchanged workloads'
+    required: false
+  manifest-namespace:
+    description: 'Namespace for workloads without metadata.namespace in either manifest (defaults to default)'
+    required: false
   reports:
     description: 'Comma- or newline-separated list of DoiT Cloud Analytics report IDs to attach the annotation to'
     required: false
@@ -83,7 +92,7 @@ outputs:
   annotation-json:
     description: 'Full JSON string of the annotation response or dry-run payload'
   annotation-skipped:
-    description: 'Whether annotation creation was skipped due to require-tag, require-commit-tag, or require-pr-label filters ("true" or "false")'
+    description: 'Whether creation was skipped due to filters or no tracked manifest changes ("true" or "false")'
 
 runs:
   using: 'node24'
